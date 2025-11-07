@@ -87,14 +87,25 @@ timer_elapsed (int64_t then) {
 	return timer_ticks () - then;
 }
 
-/* Suspends execution for approximately TICKS timer ticks. */
-void
-timer_sleep (int64_t ticks) {
-	int64_t start = timer_ticks ();
+/**
+ * @brief 현재 스레드를 지정된 시간(ticks) 동안 잠재웁니다.
+ * @details 현재 시스템 틱을 기준으로 깨어날 절대 시간(awake_tick)을 계산한 후,
+ * thread_sleep 함수를 호출하여 스레드를 슬립 리스트에 삽입하고 차단(Block)합니다.
+ *
+ * @param ticks 스레드가 **대기할 시간의 길이** (상대적인 타이머 틱 수).
+ * (ticks가 0 이하일 경우, 함수는 즉시 반환됩니다.)
+ */
+void timer_sleep (int64_t ticks) {
 
-	ASSERT (intr_get_level () == INTR_ON);
-	while (timer_elapsed (start) < ticks)
-		thread_yield ();
+
+	if (ticks <= 0) {
+		return;
+	}
+
+	int64_t start = timer_ticks ();
+	int64_t awake_tick = start + ticks;
+
+	thread_sleep(awake_tick);
 }
 
 /* Suspends execution for approximately MS milliseconds. */
@@ -120,11 +131,21 @@ void
 timer_print_stats (void) {
 	printf ("Timer: %"PRId64" ticks\n", timer_ticks ());
 }
-
+
 /* Timer interrupt handler. */
-static void
-timer_interrupt (struct intr_frame *args UNUSED) {
+/**
+ * @brief 타이머 인터럽트 발생 시 호출되는 핸들러 함수입니다.
+ * @details 틱이 발생할 때마다 시스템 시간을 갱신하고, 잠자던 스레드(sleep_list)를 깨우며,
+ * 현재 실행 중인 스레드의 타임 슬라이스를 관리(thread_tick)합니다.
+ * 이 순서는 스케줄링 및 동기화 관점에서 가장 논리적이고 일반적인 구현입니다.
+ *
+ * @param args UNUSED 인터럽트 발생 시의 CPU 레지스터 상태가 담긴 프레임 (여기서는 사용되지 않음).
+ */
+static void timer_interrupt (struct intr_frame *args UNUSED) {
 	ticks++;
+
+	thread_wake_up(ticks); 
+
 	thread_tick ();
 }
 
