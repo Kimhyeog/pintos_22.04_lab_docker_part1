@@ -27,7 +27,7 @@
 /* List of processes in THREAD_READY state, that is, processes
    that are ready to run but not actually running. */
 static struct list ready_list;
-
+static struct list sleep_list; //숙면 찜질방
 /* Idle thread. */
 static struct thread *idle_thread;
 
@@ -95,7 +95,7 @@ static uint64_t gdt[3] = { 0, 0x00af9a000000ffff, 0x00cf92000000ffff };
 void
 thread_init (void) {
 	ASSERT (intr_get_level () == INTR_OFF);
-
+	
 	/* Reload the temporal gdt for the kernel
 	 * This gdt does not include the user context.
 	 * The kernel will rebuild the gdt with user context, in gdt_init (). */
@@ -109,7 +109,7 @@ thread_init (void) {
 	lock_init (&tid_lock);
 	list_init (&ready_list);
 	list_init (&destruction_req);
-
+	list_init (&sleep_list);
 	/* Set up a thread structure for the running thread. */
 	initial_thread = running_thread ();
 	init_thread (initial_thread, "main", PRI_DEFAULT);
@@ -587,4 +587,43 @@ allocate_tid (void) {
 	lock_release (&tid_lock);
 
 	return tid;
+}
+
+bool less_tick(const struct list_elem *a, const struct list_elem *b, void *aux)
+{
+	struct thread *thread_a, *thread_b;
+	thread_a = list_entry(a, struct thread, elem);
+	thread_b = list_entry(b, struct thread, elem);
+	bool ans;
+	return ans = thread_a->wakeup_tick < thread_b->wakeup_tick?true:false;
+}
+
+void thread_sleep(int64_t ticks)
+{
+	int64_t start = timer_ticks ();
+	struct thread *cur = thread_current(); //현재 스레드 만들기
+	cur-> wakeup_tick = start + ticks; // 깨어날 틱 스레드에 저장
+	enum intr_level old_level;
+
+	//임계 구역(Critical Section)
+	old_level = intr_disable(); // 인터럽터 비활성화
+	list_insert_ordered(&sleep_list, &cur->elem, less_tick, NULL); // sleep_list에 스레드 추가
+	thread_block(); //스레드 상태 변경
+	intr_set_level(old_level);// 인터럽트 원래 상태 복구
+}
+
+
+void thread_wakeup(int64_t cur_ticks)
+{
+	while (!list_empty(&sleep_list))// sleep list가 비어있는지?
+	{
+		struct list_elem *first = list_front(&sleep_list);
+		struct thread *t = list_entry(first, struct thread, elem); // t 갱신
+
+		if (t->wakeup_tick > cur_ticks) 
+			break;
+			
+		list_pop_front(&sleep_list); // t 상태 변경
+		thread_unblock(t);
+	}
 }
