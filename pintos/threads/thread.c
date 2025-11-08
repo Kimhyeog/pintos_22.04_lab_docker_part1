@@ -56,17 +56,19 @@ static unsigned thread_ticks; /* # of timer ticks since last yield. */
    Controlled by kernel command-line option "-o mlfqs". */
 bool thread_mlfqs;
 
+bool cmp_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
+
 static void kernel_thread(thread_func *, void *aux);
 
 static void idle(void *aux UNUSED);
 static struct thread *next_thread_to_run(void);
 static void init_thread(struct thread *, const char *name, int priority);
 static void do_schedule(int status);
-static void schedule (void);
-static tid_t allocate_tid (void);
-static int thread_awake_less (const struct list_elem *a,
-                              const struct list_elem *b,
-                              void *aux);
+static void schedule(void);
+static tid_t allocate_tid(void);
+static int thread_awake_less(const struct list_elem *a,
+							 const struct list_elem *b,
+							 void *aux);
 
 /* Returns true if T appears to point to a valid thread. */
 #define is_thread(t) ((t) != NULL && (t)->magic == THREAD_MAGIC)
@@ -109,9 +111,9 @@ void thread_init(void)
 	lgdt(&gdt_ds);
 
 	/* Init the globla thread context */
-	lock_init (&tid_lock);
-	list_init (&ready_list);
-	list_init (&destruction_req);
+	lock_init(&tid_lock);
+	list_init(&ready_list);
+	list_init(&destruction_req);
 	list_init(&sleep_list);
 
 	/* Set up a thread structure for the running thread. */
@@ -290,6 +292,30 @@ int thread_awake_less(const struct list_elem *a,
 }
 
 /**
+ * @brief 두 스레드의 우선순위를 비교합니다 (내림차순 정렬용).
+ * @details list_insert_ordered() 등에 사용되어 우선순위가 높은 스레드가 리스트의 앞쪽에
+ * 위치하도록 합니다. 우선순위가 같을 경우 false를 반환하여 기존 요소 뒤에 삽입되므로
+ * FIFO 순서가 보장됩니다.
+ *
+ * @param a 비교할 첫 번째 리스트 요소
+ * @param b 비교할 두 번째 리스트 요소
+ * @param aux 사용하지 않음 (NULL)
+ * @return a의 우선순위가 b보다 높으면 true, 그렇지 않으면 false
+ *
+ * [사용 예시]
+ * 두 스레드의 우선순위 비교 (내림차순 정렬용)
+ * 사용 예: list_insert_ordered(&ready_list, &t->elem, cmp_priority, NULL);
+ * ready_list에 t를 삽입하되, cmp_priority에 따라 정렬된 위치에 넣음
+ */
+bool cmp_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+{
+	struct thread *ta = list_entry(a, struct thread, elem);
+	struct thread *tb = list_entry(b, struct thread, elem);
+
+	return ta->priority > tb->priority;
+}
+
+/**
  * @brief 현재 시스템 시간을 기준으로, 깨어날 시간이 된 모든 스레드를 깨웁니다.
  * @details sleep_list를 순회하며, 스레드의 awake_tick이 current_ticks보다 작거나
  * 같은 경우(즉, 깨어날 시간이 된 경우) 해당 스레드를 sleep_list에서 제거하고
@@ -323,110 +349,32 @@ void thread_wake_up(int64_t current_ticks)
 }
 
 /**
- * @brief 현재 실행 중인 스레드를 잠들게(sleep) 만듭니다.
- * @details 이 함수는 현재 스레드를 'sleep_list'에 깨어날 시간 순서로 정렬 삽입하고,
- * thread_block()을 호출하여 스레드를 차단(Block)시킵니다. 모든 과정은 인터럽트를 끄고
- * (intr_disable) 처리되어 원자성을 보장합니다.
- *
- * @param awake_tick 스레드가 깨어나야 할 절대 시간 (타이머 틱 값).
- *
- * [주요 변수 설명]
- * struct thread *cur: 현재 실행 중인 스레드 ('잠들 주체')
- * enum intr_level old_level: 인터럽트 끄기 전의 원래 상태 (복원용)
+ * 역할1 : 함수는 블록(대기) 상태였던 스레드를 깨워 실행 가능한 상태(THREAD_READY) 전환
+ * 역할2 : ready_list 넣기
+ * 인자 : sleep_list에 들어갈 thread
+ * 결과 : 해당 thread를 실행 대기 상태로 전환 및 ready_list로 이동됨
  */
-void thread_sleep(int64_t awake_tick) {
 
-	struct thread *cur = thread_current();
-	
-	// 인터럽트 끄기
-	enum intr_level old_level = intr_disable();
-
-	cur->awake_tick = awake_tick;
-
-	// 'Sleep 리스트'에 'thread_awake_less' 함수를 기준으로 '정렬 삽입'
-	list_insert_ordered(&sleep_list, &cur->elem, thread_awake_less, NULL);
-
-	// 잠들기
-	thread_block();
-
-	// 깨어난 후 인터럽트 복원
-	intr_set_level (old_level);
-}
-
-/**
- * @brief 두 스레드를 비교하여 깨어날 시간이 더 빠른 스레드를 결정하는 비교 함수입니다.
- * @details list_insert_ordered()에서 사용되며, 반환 값이 1(True)이면 
- * 첫 번째 인자(a)가 두 번째 인자(b)보다 리스트의 앞쪽에 위치하도록 지시합니다.
- * 이 함수 덕분에 'sleep_list'는 깨어날 시간이 빠른 순서대로 정렬됩니다.
- *
- * @param a 비교 대상이 되는 첫 번째 리스트 요소의 포인터.
- * @param b 비교 대상이 되는 두 번째 리스트 요소의 포인터.
- * @param aux 사용되지 않는 보조 인자.
- * * [주요 변수 설명]
- * struct thread *t_a: 리스트 요소 a에 연결된 스레드 구조체.
- * struct thread *t_b: 리스트 요소 b에 연결된 스레드 구조체.
- */
-int thread_awake_less (const struct list_elem *a,
-                   const struct list_elem *b, void *aux) {
-  struct thread *t_a = list_entry (a, struct thread, elem);
-  struct thread *t_b = list_entry (b, struct thread, elem);
-
-  if (t_a->awake_tick < t_b->awake_tick) {
-    return 1; 
-  } else {
-    return 0; 
-  }
-}
-
-/**
- * @brief 현재 시스템 시간을 기준으로, 깨어날 시간이 된 모든 스레드를 깨웁니다.
- * @details sleep_list를 순회하며, 스레드의 awake_tick이 current_ticks보다 작거나
- * 같은 경우(즉, 깨어날 시간이 된 경우) 해당 스레드를 sleep_list에서 제거하고
- * ready_list로 이동(thread_unblock)시켜 다시 실행 가능 상태로 만듭니다.
- * sleep_list가 깨어날 시간 순으로 정렬되어 있으므로, 깨어날 시간이 안 된 스레드를
- * 만나면 즉시 루프를 중단하여 효율적입니다.
- *
- * @param current_ticks 현재 타이머의 틱 값 (thread_tick에서 전달).
- *
- * [주요 변수 설명]
- * struct list_elem *e: 현재 확인 중인 sleep_list 요소 (노드).
- * struct thread *t: 리스트 요소 e에 연결된 스레드 구조체.
- */
-void thread_wake_up(int64_t current_ticks) {
-
-	while (!list_empty(&sleep_list)) {
-
-		struct list_elem *e = list_begin(&sleep_list);
-		struct thread *t = list_entry(e, struct thread, elem);
-
-		if (t->awake_tick > current_ticks) {
-			break;
-		}
-
-		list_remove(e);
-		thread_unblock(t);
-
-	}
-}
-
-/* Transitions a blocked thread T to the ready-to-run state.
-   This is an error if T is not blocked.  (Use thread_yield() to
-   make the running thread ready.)
-
-   This function does not preempt the running thread.  This can
-   be important: if the caller had disabled interrupts itself,
-   it may expect that it can atomically unblock a thread and
-   update other data. */
 void thread_unblock(struct thread *t)
 {
+	// 1. CPU Interrupt 상태 보관용 변수
 	enum intr_level old_level;
 
+	// 2. ready_list로 옮길 thread가 유효 상태인지 확인
+	// ASSERT() : thread가 유효하지 않을 시, 커널 패닉 발생
 	ASSERT(is_thread(t));
 
+	// 3. Interrupt 비활성화 및 블록 상태 확인
 	old_level = intr_disable();
 	ASSERT(t->status == THREAD_BLOCKED);
-	list_push_back(&ready_list, &t->elem);
+
+	// 4. ready_list에 thread t 삽입
+	list_insert_ordered(&ready_list, &t->elem, cmp_priority, NULL);
+
+	// 5. thread t 의 실행대기중 상태로 변환
 	t->status = THREAD_READY;
+
+	// 6. interrupt 상태 복구
 	intr_set_level(old_level);
 }
 
@@ -479,19 +427,35 @@ void thread_exit(void)
 	NOT_REACHED();
 }
 
-/* Yields the CPU.  The current thread is not put to sleep and
-   may be scheduled again immediately at the scheduler's whim. */
+/**
+ * 역할1 : CPU에서 실행중인 thread 포기 r
+ * 역할2 : readylist의 맨 앞 thread를 꺼내서, 실행
+ * 역할3 : readylist에서 꺼낸 thread CPU에 장착
+ * 역할4 : Context Switching 작업
+ * 인자 : X
+ * 결과 : CP
+ */
 void thread_yield(void)
 {
-	struct thread *curr = thread_current();
+	// 1.현재 CPU에서 실행중인 thread 갖고오기
+	struct thread *cur = thread_current();
+
+	// 2. Interrupt 상태 임시 보관 변수 선언
 	enum intr_level old_level;
 
+	// 3. Interrupt에 의해서 발생된 함수가 아니라는 걸 커널에게 알리는 코드
 	ASSERT(!intr_context());
 
+	// 4. interrupt 비활성화
 	old_level = intr_disable();
-	if (curr != idle_thread)
-		list_push_back(&ready_list, &curr->elem);
+
+	// 5. 현재 CPU가 실행중인 thread가 idle_thread가 아닐시에만 , ready_list에 삽입
+	if (cur != idle_thread)
+		list_insert_ordered(&ready_list, &cur->elem, cmp_priority, NULL);
+
+	// 6. context Switch : CPU와 ready_list에서 꺼낸 thread 상태 서로 업데이트
 	do_schedule(THREAD_READY);
+	// 7. interrupt 상태 복구 -> intr_set_level()
 	intr_set_level(old_level);
 }
 
@@ -785,4 +749,21 @@ allocate_tid(void)
 	lock_release(&tid_lock);
 
 	return tid;
+}
+/**
+ * @brief 현재 실행 중인 스레드와 ready_list의 가장 높은 우선순위 스레드를 비교하여
+ * 선점이 필요하면 intr_yield_on_return()을 호출합니다.
+ */
+void thread_test_preemption(void)
+{
+	// 1. ready_list 비어있다면, 검사 안해도됨
+	if (!list_empty(&ready_list))
+	{
+		// 2. ready_list의 맨 앞 thread 꺼내기 -> list_entry
+		struct thread *front_thread = list_entry(list_begin(&ready_list), struct thread, elem);
+
+		// 3. 교체 검사
+		if (front_thread->priority > thread_current()->priority)
+			intr_yield_on_return(); // 인터럽트 종료 후에 교체되도록 예약 함수
+	}
 }
