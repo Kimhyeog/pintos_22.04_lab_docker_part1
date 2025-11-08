@@ -211,7 +211,14 @@ tid_t thread_create(const char *name, int priority,
 	t->tf.eflags = FLAG_IF;
 
 	/* Add to run queue. */
+	// ready_list에 새로운 thread 삽입 작업
 	thread_unblock(t);
+
+	//
+	// 삽입 후 정렬된 후의 ready_list_front_tread 와 CPU 현재 실행중인 thread 우선순위 비교
+	// ready_list 앞 thread가 우선순위 더 클떄만 교체
+	if (priority > thread_current()->priority)
+		thread_yield();
 
 	return tid;
 }
@@ -463,6 +470,12 @@ void thread_yield(void)
 void thread_set_priority(int new_priority)
 {
 	thread_current()->priority = new_priority;
+	// ready_list가 비어있지 않고, 맨 앞 스레드가 나보다 우선순위가 높으면 양보
+	if (!list_empty(&ready_list) &&
+		list_entry(list_begin(&ready_list), struct thread, elem)->priority > new_priority)
+	{
+		thread_yield();
+	}
 }
 
 /* Returns the current thread's priority. */
