@@ -99,9 +99,6 @@ struct thread
 	// timer 기능
 	int64_t awake_tick;
 
-	// timer 기능
-	int64_t awake_tick;
-
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */
 	uint64_t *pml4; /* Page map level 4 */
