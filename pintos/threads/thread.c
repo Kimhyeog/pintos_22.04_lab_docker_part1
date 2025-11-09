@@ -769,14 +769,14 @@ allocate_tid(void)
  */
 void thread_test_preemption(void)
 {
-	// 1. ready_list 비어있다면, 검사 안해도됨
-	if (!list_empty(&ready_list))
+	if (!list_empty(&ready_list) &&
+		thread_current()->priority < list_entry(list_begin(&ready_list), struct thread, elem)->priority)
 	{
-		// 2. ready_list의 맨 앞 thread 꺼내기 -> list_entry
-		struct thread *front_thread = list_entry(list_begin(&ready_list), struct thread, elem);
-
-		// 3. 교체 검사
-		if (front_thread->priority > thread_current()->priority)
-			intr_yield_on_return(); // 인터럽트 종료 후에 교체되도록 예약 함수
+		/* 현재 상황이 인터럽트 핸들러 실행 중이면 intr_yield_on_return 사용,
+		   아니면(일반 스레드 실행 중이면) thread_yield 바로 사용 */
+		if (intr_context())
+			intr_yield_on_return();
+		else
+			thread_yield();
 	}
 }
