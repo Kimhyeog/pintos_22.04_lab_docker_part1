@@ -315,7 +315,7 @@ void thread_wake_up(int64_t current_ticks) {
 	}
 }
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-int thread_priority_less (const struct list_elem *a,
+bool thread_priority_less (const struct list_elem *a,
                    const struct list_elem *b, void *aux) {
 	struct thread *t_a = list_entry (a, struct thread, elem);
 	struct thread *t_b = list_entry (b, struct thread, elem);
