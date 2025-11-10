@@ -244,10 +244,9 @@ thread_block (void) {
 void thread_sleep(int64_t awake_tick) {
 
 	struct thread *cur = thread_current();
-	
 	// 인터럽트 끄기
 	enum intr_level old_level = intr_disable();
-
+	ASSERT(cur != idle_thread);
 	cur->awake_tick = awake_tick;
 
 	// 'Sleep 리스트'에 'thread_awake_less' 함수를 기준으로 '정렬 삽입'
@@ -346,7 +345,6 @@ thread_unblock (struct thread *t) {
 
 	old_level = intr_disable ();
 	ASSERT (t->status == THREAD_BLOCKED);
-	// list_push_back (&ready_list, &t->elem);
 	list_insert_ordered(&ready_list, &t->elem, thread_priority_less, NULL); 
 	t->status = THREAD_READY;
 	
@@ -415,7 +413,8 @@ thread_yield (void) {
 	if (curr != idle_thread)
 		// list_push_back (&ready_list, &curr->elem);
 		list_insert_ordered(&ready_list, &curr->elem, thread_priority_less, NULL); 
-	do_schedule (THREAD_READY);
+		do_schedule (THREAD_READY);
+	
 	intr_set_level (old_level);
 }
 
@@ -428,10 +427,8 @@ thread_set_priority (int new_priority) {
 	ASSERT (is_thread (cur));
     old_level = intr_disable ();
 	
-	// 새로운 우선 순위 부여
-	thread_current ()->priority = new_priority;
-	// preemption
-	thread_preemption();
+	thread_current ()->priority = new_priority;	// 새로운 우선 순위 부여
+	thread_preemption();// preemption
     intr_set_level (old_level);
 }
 
