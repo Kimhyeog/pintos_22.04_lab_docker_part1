@@ -31,7 +31,6 @@
 #include <string.h>
 #include "threads/interrupt.h"
 #include "threads/thread.h"
-bool thread_compare_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 bool cmp_sem_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 /* Initializes semaphore SEMA to VALUE.  A semaphore is a
    nonnegative integer along with two atomic operators for
@@ -71,7 +70,7 @@ void sema_down(struct semaphore *sema)
 		/* [수정] FIFO → 우선순위 정렬 삽입 */
 		// list_push_back(&sema->waiters, &thread_current()->elem);
 		// list_insert_ordered(&sema->waiters, &thread_current()->elem, cmp_sem_priority, NULL);
-		list_insert_ordered(&sema->waiters, &thread_current()->elem, thread_compare_priority, NULL);
+		list_insert_ordered(&sema->waiters, &thread_current()->elem, cmp_priority, NULL);
 		thread_block();
 	}
 	sema->value--;
@@ -353,9 +352,4 @@ bool cmp_sem_priority(const struct list_elem *a, const struct list_elem *b, void
 
 	/* 높은 우선순위가 앞으로 오도록 (내림차순) */
 	return ta->priority > tb->priority;
-}
-
-bool thread_compare_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
-{
-	return list_entry(a, struct thread, elem)->priority > list_entry(b, struct thread, elem)->priority;
 }
