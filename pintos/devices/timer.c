@@ -108,7 +108,6 @@ void timer_sleep(int64_t ticks)
 
 	int64_t start = timer_ticks();
 	int64_t awake_tick = start + ticks;
-
 	thread_sleep(awake_tick);
 }
 

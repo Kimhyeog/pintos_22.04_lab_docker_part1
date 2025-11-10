@@ -91,7 +91,7 @@ struct thread
 	tid_t tid;				   /* Thread identifier. */
 	enum thread_status status; /* Thread state. */
 	char name[16];			   /* Name (for debugging purposes). */
-	int priority;			   /* Priority. */
+	int priority;			   /* 현재 유효 우선순위 (기부 받은 값 포함) */
 
 	/* Shared between thread.c and synch.c. */
 	struct list_elem elem; /* List element. */
@@ -111,6 +111,12 @@ struct thread
 	/* Owned by thread.c. */
 	struct intr_frame tf; /* Information for switching */
 	unsigned magic;		  /* Detects stack overflow. */
+
+	/* 추가 필요 필드 */
+	int original_priority;			/* 기부 받기 전 원래의 우선순위 기억 */
+	struct lock *wait_lock;			/* 현재 이 스레드가 기다리고 있는 락 (누구에게 기부할지 찾기 위해) */
+	struct list donations;			/* 나에게 우선순위를 기부해준 스레드들의 리스트 (다중 기부 관리를 위해) */
+	struct list_elem donation_elem; /* 위 리스트를 위한 element */
 };
 
 /* If false (default), use round-robin scheduler.
@@ -158,5 +164,13 @@ void thread_sleep(int64_t awake_tick);
 void thread_wake_up(int64_t current_ticks);
 void thread_test_preemption(void);
 bool cmp_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
+void donate_priority(void);
+void refresh_priority(void);			  // <-- 추가
+void remove_with_lock(struct lock *lock); // <-- 추가
+
+void donate_priority(void);
+void refresh_priority(void);
+void remove_with_lock(struct lock *lock);
+bool cmp_donation_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
 
 #endif /* threads/thread.h */

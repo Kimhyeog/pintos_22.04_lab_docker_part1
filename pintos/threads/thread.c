@@ -57,7 +57,7 @@ static unsigned thread_ticks; /* # of timer ticks since last yield. */
 bool thread_mlfqs;
 
 bool cmp_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
-
+void donate_priority(void);
 static void kernel_thread(thread_func *, void *aux);
 
 static void idle(void *aux UNUSED);
@@ -253,7 +253,7 @@ void thread_sleep(int64_t awake_tick)
 {
 
 	struct thread *cur = thread_current();
-
+	ASSERT(cur != idle_thread); // ✅ idle 스레드는 절대 재우지 않음
 	// 인터럽트 끄기
 	enum intr_level old_level = intr_disable();
 
@@ -458,10 +458,12 @@ void thread_yield(void)
 
 	// 5. 현재 CPU가 실행중인 thread가 idle_thread가 아닐시에만 , ready_list에 삽입
 	if (cur != idle_thread)
+	{
 		list_insert_ordered(&ready_list, &cur->elem, cmp_priority, NULL);
-
+	}
 	// 6. context Switch : CPU와 ready_list에서 꺼낸 thread 상태 서로 업데이트
 	do_schedule(THREAD_READY);
+
 	// 7. interrupt 상태 복구 -> intr_set_level()
 	intr_set_level(old_level);
 }
@@ -470,6 +472,12 @@ void thread_yield(void)
 void thread_set_priority(int new_priority)
 {
 	thread_current()->priority = new_priority;
+
+	// 추가 thread 필드
+	thread_current()->original_priority = new_priority;
+	refresh_priority();		  // 기부받은 우선순위 재계산 함수 (새로 구현 필요)
+	thread_test_preemption(); // 선점 검사
+
 	// ready_list가 비어있지 않고, 맨 앞 스레드가 나보다 우선순위가 높으면 양보
 	if (!list_empty(&ready_list) &&
 		list_entry(list_begin(&ready_list), struct thread, elem)->priority > new_priority)
@@ -577,6 +585,11 @@ init_thread(struct thread *t, const char *name, int priority)
 	t->priority = priority;
 	t->magic = THREAD_MAGIC;
 	t->awake_tick = 0;
+
+	/* 추가 초기화 */
+	t->original_priority = priority;
+	t->wait_lock = NULL;
+	list_init(&t->donations);
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should
@@ -778,5 +791,84 @@ void thread_test_preemption(void)
 			intr_yield_on_return();
 		else
 			thread_yield();
+	}
+}
+
+/* Donation 리스트를 우선순위 내림차순으로 정렬하기 위한 비교 함수 */
+bool cmp_donation_priority(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+{
+	struct thread *ta = list_entry(a, struct thread, donation_elem);
+	struct thread *tb = list_entry(b, struct thread, donation_elem);
+
+	return ta->priority > tb->priority;
+}
+
+/* 현재 스레드의 우선순위를 락 보유자에게 기부 (최대 8단계 깊이) */
+void donate_priority(void)
+{
+	int depth;
+	struct thread *cur = thread_current();
+
+	for (depth = 0; depth < 8; depth++)
+	{
+		if (cur->wait_lock == NULL)
+		{
+			break;
+		}
+
+		struct thread *holder = cur->wait_lock->holder;
+
+		if (holder->priority < cur->priority)
+		{
+			holder->priority = cur->priority;
+		}
+		else
+		{
+			break;
+		}
+
+		cur = holder;
+	}
+}
+
+/* 락 해제 시, 해당 락과 관련된 모든 기부 정보를 삭제 */
+void remove_with_lock(struct lock *lock)
+{
+	struct thread *cur = thread_current();
+	struct list_elem *e = list_begin(&cur->donations);
+
+	while (e != list_end(&cur->donations))
+	{
+		struct thread *t = list_entry(e, struct thread, donation_elem);
+
+		if (t->wait_lock == lock)
+		{
+			e = list_remove(e);
+		}
+		else
+		{
+			e = list_next(e);
+		}
+	}
+}
+
+/* 스레드의 우선순위를 재계산 (원래 우선순위 vs 기부받은 우선순위 중 최댓값) */
+void refresh_priority(void)
+{
+	struct thread *cur = thread_current();
+
+	cur->priority = cur->original_priority;
+
+	if (!list_empty(&cur->donations))
+	{
+		// donations 리스트는 항상 정렬된 상태여야 함
+		list_sort(&cur->donations, cmp_donation_priority, NULL);
+
+		struct thread *max_donor = list_entry(list_begin(&cur->donations), struct thread, donation_elem);
+
+		if (max_donor->priority > cur->priority)
+		{
+			cur->priority = max_donor->priority;
+		}
 	}
 }

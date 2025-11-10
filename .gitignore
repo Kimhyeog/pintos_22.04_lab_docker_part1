@@ -31,3 +31,7 @@ core
 
 # Devcontainer
 .devcontainer/
+
+.vscode/settings.json
+asd.sh
+zxc.sh

@@ -114,11 +114,8 @@ void sema_up(struct semaphore *sema)
 
 	old_level = intr_disable();
 	if (!list_empty(&sema->waiters))
-	{
 		/* 가장 높은 우선순위 스레드를 꺼내 깨움 */
-		thread_unblock(list_entry(list_pop_front(&sema->waiters),
-								  struct thread, elem));
-	}
+		thread_unblock(list_entry(list_pop_front(&sema->waiters), struct thread, elem));
 
 	sema->value++;
 
@@ -201,6 +198,13 @@ void lock_acquire(struct lock *lock)
 	ASSERT(!intr_context());
 	ASSERT(!lock_held_by_current_thread(lock));
 
+	if (lock->holder != NULL)
+	{
+		thread_current()->wait_lock = lock;
+		list_insert_ordered(&lock->holder->donations, &thread_current()->donation_elem, cmp_priority, NULL); // donations 리스트 정렬 삽입
+		donate_priority();																					 // 우선순위 기부 수행 (새로 구현 필요)
+	}
+
 	sema_down(&lock->semaphore);
 	lock->holder = thread_current();
 }
@@ -234,6 +238,10 @@ void lock_release(struct lock *lock)
 {
 	ASSERT(lock != NULL);
 	ASSERT(lock_held_by_current_thread(lock));
+
+	/* ... */
+	remove_with_lock(lock); // 해제할 락과 관련된 기부 제거 (새로 구현 필요)
+	refresh_priority();		// 우선순위 재계산
 
 	lock->holder = NULL;
 	sema_up(&lock->semaphore);
@@ -302,13 +310,6 @@ void cond_wait(struct condition *cond, struct lock *lock)
 	lock_acquire(lock);
 }
 
-/* If any threads are waiting on COND (protected by LOCK), then
-   this function signals one of them to wake up from its wait.
-   LOCK must be held before calling this function.
-
-   An interrupt handler cannot acquire a lock, so it does not
-   make sense to try to signal a condition variable within an
-   interrupt handler. */
 void cond_signal(struct condition *cond, struct lock *lock UNUSED)
 {
 	ASSERT(cond != NULL);
@@ -320,9 +321,7 @@ void cond_signal(struct condition *cond, struct lock *lock UNUSED)
 		list_sort(&cond->waiters, cmp_sem_priority, NULL);
 
 		/* 가장 높은 우선순위의 waiter 깨움 */
-		sema_up(&list_entry(list_pop_front(&cond->waiters),
-							struct semaphore_elem, elem)
-					 ->semaphore);
+		sema_up(&list_entry(list_pop_front(&cond->waiters), struct semaphore_elem, elem)->semaphore);
 	}
 }
 
