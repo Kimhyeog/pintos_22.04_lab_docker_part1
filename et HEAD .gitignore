@@ -1,0 +1,170 @@
+[33mcommit d0cab1d373029003c6ea3fe9e6728b96cc8e2b39[m[33m ([m[1;36mHEAD -> [m[1;32mKimhyeog[m[33m)[m
+Author: 김형준 <>
+Date:   Mon Nov 10 16:54:46 2025 +0900
+
+    Priority Donation 구현 및 모든 donation 테스트 통과
+
+[1mdiff --git a/.gitignore b/.gitignore[m
+[1mindex 15cab35..c6b8b3b 100644[m
+[1m--- a/.gitignore[m
+[1m+++ b/.gitignore[m
+[36m@@ -30,4 +30,8 @@[m [mcore[m
+ .DS_Store[m
+ [m
+ # Devcontainer[m
+[31m-.devcontainer/[m
+\ No newline at end of file[m
+[32m+[m[32m.devcontainer/[m
+[32m+[m
+[32m+[m[32m.vscode/settings.json[m
+[32m+[m[32masd.sh[m
+[32m+[m[32mzxc.sh[m
+\ No newline at end of file[m
+[1mdiff --git a/.vscode/settings.json b/.vscode/settings.json[m
+[1mdeleted file mode 100644[m
+[1mindex 47695b1..0000000[m
+[1m--- a/.vscode/settings.json[m
+[1m+++ /dev/null[m
+[36m@@ -1,14 +0,0 @@[m
+[31m-{[m
+[31m-    "files.associations": {[m
+[31m-        "interrupt.h": "c",[m
+[31m-        "thread.h": "c",[m
+[31m-        "flags.h": "c",[m
+[31m-        "string.h": "c",[m
+[31m-        "palloc.h": "c",[m
+[31m-        "vaddr.h": "c",[m
+[31m-        "intrinsic.h": "c",[m
+[31m-        "synch.h": "c",[m
+[31m-        "intr-stubs.h": "c",[m
+[31m-        "random.h": "c"[m
+[31m-    }[m
+[31m-}[m
+\ No newline at end of file[m
+[1mdiff --git a/asd.sh b/asd.sh[m
+[1mdeleted file mode 100755[m
+[1mindex 461e1eb..0000000[m
+[1m--- a/asd.sh[m
+[1m+++ /dev/null[m
+[36m@@ -1,12 +0,0 @@[m
+[31m-cd pintos/threads && make clean[m
+[31m-[m
+[31m-make build/tests/threads/alarm-single.result[m
+[31m-make build/tests/threads/alarm-priority.result[m
+[31m-make build/tests/threads/alarm-simultaneous.result[m
+[31m-make build/tests/threads/alarm-multiple.result[m
+[31m-make build/tests/threads/alarm-negative.result[m
+[31m-make build/tests/threads/alarm-zero.result[m
+[31m-[m
+[31m-cd build && grep "PASS\\|FAIL" tests/threads/alarm-*.result[m
+[31m-[m
+[31m-grep "PASS\\|FAIL" tests/threads/alarm-*.result[m
+\ No newline at end of file[m
+[1mdiff --git a/pintos/devices/disk.c b/pintos/devices/disk.c[m
+[1mindex 3aa63e8..f256297 100644[m
+[1m--- a/pintos/devices/disk.c[m
+[1m+++ b/pintos/devices/disk.c[m
+[36m@@ -12,121 +12,126 @@[m
+    controller.  It attempts to comply to [ATA-3]. */[m
+ [m
+ /* ATA command block port addresses. */[m
+[31m-#define reg_data(CHANNEL) ((CHANNEL)->reg_base + 0)     /* Data. */[m
+[31m-#define reg_error(CHANNEL) ((CHANNEL)->reg_base + 1)    /* Error. */[m
+[31m-#define reg_nsect(CHANNEL) ((CHANNEL)->reg_base + 2)    /* Sector Count. */[m
+[31m-#define reg_lbal(CHANNEL) ((CHANNEL)->reg_base + 3)     /* LBA 0:7. */[m
+[31m-#define reg_lbam(CHANNEL) ((CHANNEL)->reg_base + 4)     /* LBA 15:8. */[m
+[31m-#define reg_lbah(CHANNEL) ((CHANNEL)->reg_base + 5)     /* LBA 23:16. */[m
+[31m-#define reg_device(CHANNEL) ((CHANNEL)->reg_base + 6)   /* Device/LBA 27:24. */[m
+[31m-#define reg_status(CHANNEL) ((CHANNEL)->reg_base + 7)   /* Status (r/o). */[m
+[31m-#define reg_command(CHANNEL) reg_status (CHANNEL)       /* Command (w/o). */[m
+[32m+[m[32m#define reg_data(CHANNEL) ((CHANNEL)->reg_base + 0)	  /* Data. */[m
+[32m+[m[32m#define reg_error(CHANNEL) ((CHANNEL)->reg_base + 1)  /* Error. */[m
+[32m+[m[32m#define reg_nsect(CHANNEL) ((CHANNEL)->reg_base + 2)  /* Sector Count. */[m
+[32m+[m[32m#define reg_lbal(CHANNEL) ((CHANNEL)->reg_base + 3)	  /* LBA 0:7. */[m
+[32m+[m[32m#define reg_lbam(CHANNEL) ((CHANNEL)->reg_base + 4)	  /* LBA 15:8. */[m
+[32m+[m[32m#define reg_lbah(CHANNEL) ((CHANNEL)->reg_base + 5)	  /* LBA 23:16. */[m
+[32m+[m[32m#define reg_device(CHANNEL) ((CHANNEL)->reg_base + 6) /* Device/LBA 27:24. */[m
+[32m+[m[32m#define reg_status(CHANNEL) ((CHANNEL)->reg_base + 7) /* Status (r/o). */[m
+[32m+[m[32m#define reg_command(CHANNEL) reg_status(CHANNEL)	  /* Command (w/o). */[m
+ [m
+ /* ATA control block port addresses.[m
+    (If we supported non-legacy ATA controllers this would not be[m
+    flexible enough, but it's fine for what we do.) */[m
+[31m-#define reg_ctl(CHANNEL) ((CHANNEL)->reg_base + 0x206)  /* Control (w/o). */[m
+[31m-#define reg_alt_status(CHANNEL) reg_ctl (CHANNEL)       /* Alt Status (r/o). */[m
+[32m+[m[32m#define reg_ctl(CHANNEL) ((CHANNEL)->reg_base + 0x206) /* Control (w/o). */[m
+[32m+[m[32m#define reg_alt_status(CHANNEL) reg_ctl(CHANNEL)	   /* Alt Status (r/o). */[m
+ [m
+ /* Alternate Status Register bits. */[m
+[31m-#define STA_BSY 0x80            /* Busy. */[m
+[31m-#define STA_DRDY 0x40           /* Device Ready. */[m
+[31m-#define STA_DRQ 0x08            /* Data Request. */[m
+[32m+[m[32m#define STA_BSY 0x80  /* Busy. */[m
+[32m+[m[32m#define STA_DRDY 0x40 /* Device Ready. */[m
+[32m+[m[32m#define STA_DRQ 0x08  /* Data Request. */[m
+ [m
+ /* Control Register bits. */[m
+[31m-#define CTL_SRST 0x04           /* Software Reset. */[m
+[32m+[m[32m#define CTL_SRST 0x04 /* Software Reset. */[m
+ [m
+ /* Device Register bits. */[m
+[31m-#define DEV_MBS 0xa0            /* Must be set. */[m
+[31m-#define DEV_LBA 0x40            /* Linear based addressing. */[m
+[31m-#define DEV_DEV 0x10            /* Select device: 0=master, 1=slave. */[m
+[32m+[m[32m#define DEV_MBS 0xa0 /* Must be set. */[m
+[32m+[m[32m#define DEV_LBA 0x40 /* Linear based addressing. */[m
+[32m+[m[32m#define DEV_DEV 0x10 /* Select device: 0=master, 1=slave. */[m
+ [m
+ /* Commands.[m
+    Many more are defined but this is the small subset that we[m
+    use. */[m
+[31m-#define CMD_IDENTIFY_DEVICE 0xec        /* IDENTIFY DEVICE. */[m
+[31m-#define CMD_READ_SECTOR_RETRY 0x20      /* READ SECTOR with retries. */[m
+[31m-#define CMD_WRITE_SECTOR_RETRY 0x30     /* WRITE SECTOR with retries. */[m
+[32m+[m[32m#define CMD_IDENTIFY_DEVICE 0xec	/* IDENTIFY DEVICE. */[m
+[32m+[m[32m#define CMD_READ_SECTOR_RETRY 0x20	/* READ SECTOR with retries. */[m
+[32m+[m[32m#define CMD_WRITE_SECTOR_RETRY 0x30 /* WRITE SECTOR with retries. */[m
+ [m
+ /* An ATA device. */[m
+[31m-struct disk {[m
+[31m-	char name[8];               /* Name, e.g. "hd0:1". */[m
+[31m-	struct channel *channel;    /* Channel disk is on. */[m
+[31m-	int dev_no;                 /* Device 0 or 1 for master or slave. */[m
+[32m+[m[32mstruct disk[m
+[32m+[m[32m{[m
+[32m+[m	[32mchar name[8];			 /* Name, e.g. "hd0:1". */[m
+[32m+[m	[32mstruct channel *channel; /* Channel disk is on. */[m
+[32m+[m	[32mint dev_no;				 /* Device 0 or 1 for master or slave. */[m
+ [m
+[31m-	bool is_ata;                /* 1=This device is an ATA disk. */[m
+[31m-	disk_sector_t capacity;     /* Capacity in sectors (if is_ata). */[m
+[32m+[m	[32mbool is_ata;			/* 1=This device is an ATA disk. */[m
+[32m+[m	[32mdisk_sector_t capacity; /* Capacity in sectors (if is_ata). */[m
+ [m
+[31m-	long long read_cnt;         /* Number of sectors read. */[m
+[31m-	long long write_cnt;        /* Number of sectors written. */[m
+[32m+[m	[32mlong long read_cnt;	 /* Number of sectors read. */[m
+[32m+[m	[32mlong long write_cnt; /* Number of sectors written. */[m
+ };[m
+ [m
+ /* An ATA channel (aka controller).[m
+    Each channel can control up to two disks. */[m
+[31m-struct channel {[m
+[31m-	char name[8];               /* Name, e.g. "hd0". */[m
+[31m-	uint16_t reg_base;          /* Base I/O port. */[m
+[31m-	uint8_t irq;                /* Interrupt in use. */[m
+[31m-[m
+[31m-	struct lock lock;           /* Must acquire to access the controller. */[m
+[31m-	bool expecting_interrupt;   /* True if an interrupt is expected, false if[m
+[31m-								   any interrupt would be spurious. */[m
+[31m-	struct semaphore completion_wait;   /* Up'd by interrupt handler. */[m
+[31m-[m
+[31m-	struct disk devices[2];     /* The devices on this channel. */[m
+[32m+[m[32mstruct channel[m
+[32m+[m[32m{[m
+[32m+[m	[32mchar name[8];	   /* Name, e.g. "hd0". */[m
+[32m+[m	[32muint16_t reg_base; /* Base I/O port. */[m
+[32m+[m	[32muint8_t irq;	   /* Interrupt in use. */[m
+[32m+[m
+[32m+[m	[32mstruct lock lock;				  /* Must acquire to access the controller. */[m
+[32m+[m	[32mbool expectin

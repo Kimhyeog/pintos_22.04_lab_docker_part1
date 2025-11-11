@@ -471,19 +471,19 @@ void thread_yield(void)
 /* Sets the current thread's priority to NEW_PRIORITY. */
 void thread_set_priority(int new_priority)
 {
+
+	ASSERT(!intr_disable());
 	thread_current()->priority = new_priority;
 
 	// 추가 thread 필드
 	thread_current()->original_priority = new_priority;
+
 	refresh_priority();		  // 기부받은 우선순위 재계산 함수 (새로 구현 필요)
 	thread_test_preemption(); // 선점 검사
 
 	// ready_list가 비어있지 않고, 맨 앞 스레드가 나보다 우선순위가 높으면 양보
-	if (!list_empty(&ready_list) &&
-		list_entry(list_begin(&ready_list), struct thread, elem)->priority > new_priority)
-	{
+	if (!list_empty(&ready_list) && list_entry(list_begin(&ready_list), struct thread, elem)->priority > new_priority)
 		thread_yield();
-	}
 }
 
 /* Returns the current thread's priority. */
@@ -812,20 +812,14 @@ void donate_priority(void)
 	for (depth = 0; depth < 8; depth++)
 	{
 		if (cur->wait_lock == NULL)
-		{
 			break;
-		}
 
 		struct thread *holder = cur->wait_lock->holder;
 
 		if (holder->priority < cur->priority)
-		{
 			holder->priority = cur->priority;
-		}
 		else
-		{
 			break;
-		}
 
 		cur = holder;
 	}
@@ -862,7 +856,7 @@ void refresh_priority(void)
 	if (!list_empty(&cur->donations))
 	{
 		// donations 리스트는 항상 정렬된 상태여야 함
-		list_sort(&cur->donations, cmp_donation_priority, NULL);
+		// list_sort(&cur->donations, cmp_donation_priority, NULL);
 
 		struct thread *max_donor = list_entry(list_begin(&cur->donations), struct thread, donation_elem);
 

@@ -114,8 +114,11 @@ void sema_up(struct semaphore *sema)
 
 	old_level = intr_disable();
 	if (!list_empty(&sema->waiters))
-		/* 가장 높은 우선순위 스레드를 꺼내 깨움 */
+	{
+		/* sort를 하는 쪽으로 수정 [이유 아직 모름]*/
+		list_sort(&sema->waiters, cmp_priority, NULL);
 		thread_unblock(list_entry(list_pop_front(&sema->waiters), struct thread, elem));
+	}
 
 	sema->value++;
 
