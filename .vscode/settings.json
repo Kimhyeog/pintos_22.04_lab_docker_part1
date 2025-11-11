@@ -1,6 +1,11 @@
 {
     "files.associations": {
+<<<<<<< HEAD
+        "stddef.h": "c",
+        "process.h": "c"
+=======
         "interrupt.h": "c",
         "thread.h": "c"
+>>>>>>> main
     }
 }

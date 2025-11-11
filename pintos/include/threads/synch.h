@@ -27,6 +27,11 @@ void lock_acquire (struct lock *);
 bool lock_try_acquire (struct lock *);
 void lock_release (struct lock *);
 bool lock_held_by_current_thread (const struct lock *);
+// helper 함수
+void update_holder_priority(struct thread *holder);
+void remove_my_donation(struct lock *lock);
+bool donate_priority_less (const struct list_elem *a, const struct list_elem *b, void *aux);
+
 
 /* Condition variable. */
 struct condition {
