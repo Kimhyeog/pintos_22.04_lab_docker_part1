@@ -117,13 +117,11 @@ sema_up (struct semaphore *sema) {
 
    if (!list_empty (&sema->waiters))
    {
-      // 1. 첫 번째 녀석을 '최대'라고 가정 (리스트에 1개만 있어도 OK)
-      struct list_elem *max_elem = list_begin(&sema->waiters);
+      struct list_elem *max_elem = list_begin(&sema->waiters); // front
       struct thread *max_thread = list_entry(max_elem, struct thread, elem);
 
-      // 2. (항목이 2개 이상이면) 두 번째부터 루프를 돈다
       struct list_elem *e;
-      for (e = list_next(max_elem); e != list_end(&sema->waiters); e = list_next(e))
+      for (e = list_next(max_elem); e != list_end(&sema->waiters); e = list_next(e)) // front를 기준으로 탐색
       {
          struct thread *t = list_entry(e, struct thread, elem);
          if (t->priority > max_thread->priority) {
@@ -131,14 +129,9 @@ sema_up (struct semaphore *sema) {
                max_elem = e;
          }
       }
-      
-      // 3. (리스트에 1개만 있었다면 for문은 건너뛰고) 
-      //    '최대' 항목 (즉, 그 1개)을 제거하고 깨움
       list_remove(max_elem);
       thread_unblock(max_thread);
    }
-   thread_preemption();
-
 	intr_set_level (old_level);
 }
 
@@ -269,8 +262,8 @@ lock_acquire (struct lock *lock) {
    sema_down(&lock->semaphore); // 대기 P 연산(While) 여기서는 sema->waiter에 대기열로 추가 elem으로
    
    // 획득 후
-   lock->holder = thread_current ();
    thread_current()->waiting_on = NULL;
+   lock->holder = thread_current ();
 
    intr_set_level(old_level); // 임계 구역 종료
 }
@@ -312,7 +305,6 @@ lock_release (struct lock *lock) {
    
 	lock->holder = NULL; // 소유권 포기
 	sema_up (&lock->semaphore); // 다음 놈 깨우기
-   thread_preemption(); //sema up과 중복 일 수 있음
    intr_set_level (old_level);
 }
 
