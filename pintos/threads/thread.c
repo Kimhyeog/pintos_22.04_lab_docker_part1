@@ -580,6 +580,8 @@ init_thread(struct thread *t, const char *name, int priority)
 	t->original_priority = priority;
 	list_init(&t->donations);
 	t->waiting_on = NULL;     
+	
+	uint64_t *pml4 = NULL;
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should

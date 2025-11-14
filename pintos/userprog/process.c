@@ -51,7 +51,7 @@ process_create_initd (const char *file_name) {
 	strlcpy (fn_copy, file_name, PGSIZE);
 
 	/* Create a new thread to execute FILE_NAME. */
-	tid = thread_create (file_name, PRI_DEFAULT, initd, fn_copy);
+	tid = thread_create (file_name, PRI_DEFAULT, initd, fn_copy); //fn_copy 건들지 마삼~~~~~
 	if (tid == TID_ERROR)
 		palloc_free_page (fn_copy);
 	return tid;
@@ -162,7 +162,7 @@ error:
  * Returns -1 on fail. */
 int
 process_exec (void *f_name) {
-	char *file_name = f_name;
+	char *file_name = f_name; // 파싱해야 할것
 	bool success;
 
 	/* We cannot use the intr_frame in the thread structure.
@@ -321,13 +321,32 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
  * and its initial stack pointer into *RSP.
  * Returns true if successful, false otherwise. */
 static bool
-load (const char *file_name, struct intr_frame *if_) {
+load (const char *fn, struct intr_frame *if_) {
 	struct thread *t = thread_current ();
 	struct ELF ehdr;
 	struct file *file = NULL;
 	off_t file_ofs;
 	bool success = false;
 	int i;
+	
+	//////////////////////////Implement argument passing////////////////////////////
+	char *file_name = fn; // g해야하는거임
+	char *bookmark;
+	char *argv_token[128];
+	// 첫번째 토큰과 인덱스
+	char *token = strtok_r(file_name, " ", &bookmark); 
+	int argc=0;
+	// if go to done; palloc free
+
+	while (token != NULL)
+	{
+		argv_token[i] = token;
+		// 후위 연산 다음 토큰 계산  
+		token = strtok_r(NULL, " ", &bookmark);
+		argc++;
+	}
+	file_name = argv_token[0];
+ 	//////////////////////////Implement argument passing////////////////////////////
 
 	/* Allocate and activate page directory. */
 	t->pml4 = pml4_create ();
@@ -414,9 +433,40 @@ load (const char *file_name, struct intr_frame *if_) {
 	/* Start address. */
 	if_->rip = ehdr.e_entry;
 
-	/* TODO: Your code goes here.
-	 * TODO: Implement argument passing (see project2/argument_passing.html). */
+	////////////////////////////////////Push Stack///////////////////////////////////
 
+	// word 먼저 스택에 쌓기
+	char *argv_np[argc];
+	int pad = 0;
+	for (i = argc-1; i >= 0; i--)
+	{
+		if_->rsp -= strlen(argv_token[i]) + 1;
+		memcpy(if_->rsp, argv_token[i], strlen(argv_token[i])+1);
+		argv_np[i] = if_->rsp;
+		pad += strlen(argv_token[i]) + 1;
+	}
+	// 여기서 ------------padding----------------
+	if(pad % 8 != 0){
+		if_->rsp -= (8+(pad & ~0x7)-pad); //uint
+		memset(if_->rsp, 0, (8-pad)+(pad & ~0x7)); //memset 사용 
+	}
+	// 2. 각 문자열의 주소와 널포인터 센티널을 오른쪽에서 왼쪽 순서로 스택에 푸쉬
+	argv_np[argc] = NULL;
+	for (i = argc; i >= 0; i--)
+	{
+		if_->rsp -= 8;
+		memcpy(if_->rsp, argv_np[i], 8);
+	}	
+	// 3. argv[0]은 가장 낮은 주소에 위치
+	// 4. %rsi = argv[0] , %rdi = argc
+	if_->R.rsi = argv_np[0];
+	if_->R.rdi = argc;
+
+	// 5. return address
+	if_->rsp -= 8;
+	memset(if_->rsp, 0, 8);
+
+	////////////////////////////////////Push Stack///////////////////////////////////
 	success = true;
 
 done:
