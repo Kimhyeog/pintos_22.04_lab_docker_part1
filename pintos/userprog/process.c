@@ -330,23 +330,25 @@ load (const char *fn, struct intr_frame *if_) {
 	int i;
 	
 	//////////////////////////Implement argument passing////////////////////////////
-	char *file_name = fn; // g해야하는거임
+	char fn_copy[64], *file_name;
+	strlcpy(fn_copy, fn, strlen(fn)+1);
 	char *bookmark;
 	char *argv_token[128];
-	// 첫번째 토큰과 인덱스
-	char *token = strtok_r(file_name, " ", &bookmark); 
-	int argc=0;
-	// if go to done; palloc free
 
-	while (token != NULL)
-	{
+	// 첫번째 토큰과 인덱스
+	char *token = strtok_r(fn_copy, " ", &bookmark); 
+	int argc=0, i = 0;
+	
+	while (token != NULL){
 		argv_token[i] = token;
-		// 후위 연산 다음 토큰 계산  
 		token = strtok_r(NULL, " ", &bookmark);
 		argc++;
 	}
+	if (argv_token[0] == NULL)
+		goto done;
+	
 	file_name = argv_token[0];
- 	//////////////////////////Implement argument passing////////////////////////////
+	//////////////////////////Implement argument passing////////////////////////////
 
 	/* Allocate and activate page directory. */
 	t->pml4 = pml4_create ();
@@ -435,34 +437,38 @@ load (const char *fn, struct intr_frame *if_) {
 
 	////////////////////////////////////Push Stack///////////////////////////////////
 
-	// word 먼저 스택에 쌓기
-	char *argv_np[argc];
-	int pad = 0;
-	for (i = argc-1; i >= 0; i--)
-	{
+	// word DATA PUSH
+	char *argv_addr[128]; //
+	for (i = argc-1; i >= 0; i--){
+
 		if_->rsp -= strlen(argv_token[i]) + 1;
 		memcpy(if_->rsp, argv_token[i], strlen(argv_token[i])+1);
-		argv_np[i] = if_->rsp;
-		pad += strlen(argv_token[i]) + 1;
+		argv_addr[i] = if_->rsp;
 	}
-	// 여기서 ------------padding----------------
-	if(pad % 8 != 0){
-		if_->rsp -= (8+(pad & ~0x7)-pad); //uint
-		memset(if_->rsp, 0, (8-pad)+(pad & ~0x7)); //memset 사용 
+	//----------------PADDING PUSH-------------------
+	if(if_->rsp % 8){
+
+		uint64_t padding = if_->rsp % 8; //uint
+		if_->rsp -= padding;
+		memset(if_->rsp, 0, padding); //memset 사용 
 	}
-	// 2. 각 문자열의 주소와 널포인터 센티널을 오른쪽에서 왼쪽 순서로 스택에 푸쉬
-	argv_np[argc] = NULL;
+
+	// 각 문자열의 주소와 널포인터 센티널을 오른쪽에서 왼쪽 순서로 스택에 푸쉬
+	// argv_addr[argc] = NULL;
 	for (i = argc; i >= 0; i--)
 	{
 		if_->rsp -= 8;
-		memcpy(if_->rsp, argv_np[i], 8);
+		if(i==argc)
+			*(uint64_t *)if_->rsp = 0; // = memset(if_->rsp, 0, 8)
+		else
+			*(char **)if_->rsp = argv_addr[i]; // = memcpy(if_->rsp, argv_addr[i], 8)
 	}	
-	// 3. argv[0]은 가장 낮은 주소에 위치
-	// 4. %rsi = argv[0] , %rdi = argc
-	if_->R.rsi = argv_np[0];
+	
+	// 레지스터:  %rsi = argv[0] , %rdi = argc
+	if_->R.rsi = argv_addr[0];
 	if_->R.rdi = argc;
 
-	// 5. return address
+	// return address
 	if_->rsp -= 8;
 	memset(if_->rsp, 0, 8);
 
