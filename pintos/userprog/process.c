@@ -241,6 +241,7 @@ int process_wait(tid_t child_tid UNUSED)
 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
 	 * XXX:       to add infinite loop here before
 	 * XXX:       implementing the process_wait. */
+	timer_sleep(1000);
 	return -1;
 }
 
@@ -500,7 +501,8 @@ load(const char *file_name, struct intr_frame *if_)
 
 	// (5). argv 배열의 끝을 알리는 NULL 포인터 (0) NULL
 	if_->rsp -= 8;
-	memcpy((void *)if_->rsp, 0, sizeof(char *));
+	// memcpy((void *)if_->rsp, 0, sizeof(char *));
+	*(uint64_t *)if_->rsp = 0;
 
 	// (6). 저장 해둔 주소 배열 스택에 PUSH
 	for (int i = argc - 1; i >= 0; i--)
@@ -517,7 +519,8 @@ load(const char *file_name, struct intr_frame *if_)
 
 	// (8). 가짜 주소 NULL 넣기
 	if_->rsp -= 8;
-	memcpy((void *)if_->rsp, 0, sizeof(char *));
+	*(uint64_t *)if_->rsp = 0;
+	// memcpy((void *)if_->rsp, 0, sizeof(char *));
 
 	success = true;
 
