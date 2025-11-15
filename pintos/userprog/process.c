@@ -40,21 +40,54 @@ process_init(void)
  * thread id, or TID_ERROR if the thread cannot be created.
  * Notice that THIS SHOULD BE CALLED ONCE. */
 tid_t process_create_initd(const char *file_name)
+
 {
+
 	char *fn_copy;
+
 	tid_t tid;
 
-	/* Make a copy of FILE_NAME.
-	 * Otherwise there's a race between the caller and load(). */
+	/* 1. fn_copy 할당 및 file_name 복사 : initd 홤수로 넘겨줄 보조용 */
+
 	fn_copy = palloc_get_page(0);
+
 	if (fn_copy == NULL)
+
 		return TID_ERROR;
+
 	strlcpy(fn_copy, file_name, PGSIZE);
 
-	/* Create a new thread to execute FILE_NAME. */
-	tid = thread_create(file_name, PRI_DEFAULT, initd, fn_copy);
-	if (tid == TID_ERROR)
+	/* 2. thread_name_copy 할당 및 복사*/
+
+	char *thread_name = palloc_get_page(0);
+
+	if (thread_name == NULL)
+
+	{
+
 		palloc_free_page(fn_copy);
+
+		return TID_ERROR;
+	}
+
+	strlcpy(thread_name, file_name, PGSIZE);
+
+	/* 3. thread_name_copy */
+
+	char *save_ptr;
+
+	char *thread_real_name = strtok_r(thread_name, " ", &save_ptr);
+
+	tid = thread_create(thread_real_name, PRI_DEFAULT, initd, fn_copy);
+
+	/* 4. thread_name_copy 해제 */
+
+	palloc_free_page(thread_name);
+
+	if (tid == TID_ERROR)
+
+		palloc_free_page(fn_copy);
+
 	return tid;
 }
 
