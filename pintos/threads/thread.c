@@ -15,6 +15,44 @@
 #include "userprog/process.h"
 #endif
 
+typedef int fixed_t;
+
+#define F (1 << 14)
+
+/* Convert integer to fixed point */
+#define INT_TO_FP(n) ((n) * F)
+
+/* Convert fixed point to integer (truncate) */
+#define FP_TO_INT(x) ((x) / F)
+
+/* Convert fixed point to integer (round to nearest) */
+#define FP_TO_INT_ROUND(x) ((x) >= 0 ? ((x) + F / 2) / F : ((x) - F / 2) / F)
+
+/* Add fixed + fixed */
+#define FP_ADD(x, y) ((x) + (y))
+
+/* Add fixed + int */
+#define FP_ADD_INT(x, n) ((x) + (n) * F)
+
+/* Sub fixed - fixed */
+#define FP_SUB(x, y) ((x) - (y))
+
+/* Sub fixed - int */
+#define FP_SUB_INT(x, n) ((x) - (n) * F)
+
+/* Mul fixed * fixed */
+#define FP_MUL(x, y) ((fixed_t)(((int64_t)(x)) * (y) / F))
+
+/* Mul fixed * int */
+#define FP_MUL_INT(x, n) ((x) * (n))
+
+/* Div fixed / fixed */
+#define FP_DIV(x, y) ((fixed_t)(((int64_t)(x)) * F / (y)))
+
+/* Div fixed / int */
+#define FP_DIV_INT(x, n) ((x) / (n))
+#define FP_DIV_INT_ZERO(x, n) ((n) == 0 ? 0 : (x) / (n))
+
 /* Random value for struct thread's `magic' member.
    Used to detect stack overflow.  See the big comment at the top
    of thread.h for details. */
@@ -27,7 +65,6 @@
 /* List of processes in THREAD_READY state, that is, processes
    that are ready to run but not actually running. */
 static struct list ready_list;
-
 static struct list sleep_list;
 
 /* Idle thread. */
@@ -59,6 +96,7 @@ static unsigned thread_ticks; /* # of timer ticks since last yield. */
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
 bool thread_mlfqs;
+struct list all_list;
 
 static void kernel_thread(thread_func *, void *aux);
 static struct thread *next_thread_to_run(void);
@@ -317,7 +355,7 @@ void mlfqs_update_recent_cpu_for_thread(struct thread *t, void *aux)
 		t->recent_cpu = FP_ADD_INT(FP_MUL(decay, t->recent_cpu), t->nice);
 }
 
-void mlfqs_update_priority_for_thread(struct thread *t, void *aux UNSUED)
+void mlfqs_update_priority_for_thread(struct thread *t, void *aux UNUSED)
 {
 	// 1. idle_thread 제외하고 계산
 	// priority = PRI_MAX - (recent_cpu/4) - (nice * 2)
@@ -372,7 +410,7 @@ void thread_wake_up(int64_t current_ticks)
 }
 
 int priority_less(const struct list_elem *a,
-				  const struct list_elem *b, void *aux)
+				  const struct list_elem *b, void *aux UNUSED)
 {
 	struct thread *t_a = list_entry(a, struct thread, elem);
 	struct thread *t_b = list_entry(b, struct thread, elem);
@@ -563,11 +601,11 @@ void mlfqs_recalculate_load_avg(void)
 
 	// 순회하면서, 모든 ready_list의 길이 추출
 	for (int i = PRI_MIN; i < PRI_MAX; i++)
-		ready_threads += list_size(&ready_list[i]);
+		ready_threads += list_size(&ready_list);
 
 	// CPU가 실행중인 thread 까지 계산 포함
 	if (thread_current() != idle_thread)
-		ready_thread++;
+		ready_threads++;
 
 	// (59 / 60) * load_avg 계산
 	int part1 = FP_MUL(FP_DIV(INT_TO_FP(59), INT_TO_FP(60)), load_avg);
@@ -603,11 +641,11 @@ int thread_get_priority(void)
 }
 
 /* Sets the current thread's nice value to NICE. */
-void thread_set_nice(int nice UNUSED)
+void thread_set_nice(int nice)
 {
 	// 1. thread의 nice 필드 업데이트
 	struct thread *cur = thread_current();
-	cur->nice = new_nice;
+	cur->nice = nice;
 
 	// 2. nice값 업데이트 시, 해당 thread의 MLFQS의 readylist 갱신
 	mlfqs_update_priority_for_thread(cur, NULL);
