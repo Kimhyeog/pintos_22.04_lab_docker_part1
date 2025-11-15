@@ -2,6 +2,17 @@
     "files.associations": {
         "interrupt.h": "c",
         "thread.h": "c",
-        "syscall.h": "c"
+        "syscall.h": "c",
+        "atomic": "c",
+        "cstdint": "c",
+        "random": "c",
+        "*.inc": "c",
+        "loader.h": "c",
+        "flags.h": "c",
+        "gdt.h": "c",
+        "console.h": "c",
+        "stdarg.h": "c",
+        "syscall-nr.h": "c",
+        "vm.h": "c"
     }
 }

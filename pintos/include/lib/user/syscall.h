@@ -22,7 +22,7 @@ typedef int off_t;
 
 /* Projects 2 and later. */
 void halt (void) NO_RETURN;
-void exit (int status) NO_RETURN;
+void sys_exit (int status) NO_RETURN;
 pid_t fork (const char *thread_name);
 int exec (const char *file);
 int wait (pid_t);

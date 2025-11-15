@@ -18,6 +18,7 @@
 #include "threads/mmu.h"
 #include "threads/vaddr.h"
 #include "intrinsic.h"
+#include "threads/synch.h"
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -26,11 +27,12 @@ static void process_cleanup (void);
 static bool load (const char *file_name, struct intr_frame *if_);
 static void initd (void *f_name);
 static void __do_fork (void *);
-
+static struct semaphore sema;
 /* General process initializer for initd and other process. */
 static void
 process_init (void) {
 	struct thread *current = thread_current ();
+	sema_down(thread_current());
 }
 
 /* Starts the first userland program, called "initd", loaded from FILE_NAME.
@@ -50,12 +52,19 @@ process_create_initd (const char *file_name) {
 		return TID_ERROR;
 	strlcpy (fn_copy, file_name, PGSIZE);
 
+	sema_init(&sema, 0);
+	// parsing
+	char fn_cpcp[128];
+	strlcpy(fn_cpcp,file_name, sizeof(fn_cpcp));
+	char *bookmarker;
+	char *program_name = strtok_r(fn_cpcp, " ", &bookmarker);
+
 	/* Create a new thread to execute FILE_NAME. */
-	tid = thread_create (file_name, PRI_DEFAULT, initd, fn_copy); //fn_copy 건들지 마삼~~~~~
+	tid = thread_create (program_name, PRI_DEFAULT, initd, fn_copy);
 	if (tid == TID_ERROR)
 		palloc_free_page (fn_copy);
 	return tid;
-}
+} 
 
 /* A thread function that launches first user process. */
 static void
@@ -162,7 +171,7 @@ error:
  * Returns -1 on fail. */
 int
 process_exec (void *f_name) {
-	char *file_name = f_name; // 파싱해야 할것
+	char *file_name = f_name;
 	bool success;
 
 	/* We cannot use the intr_frame in the thread structure.
@@ -204,6 +213,9 @@ process_wait (tid_t child_tid UNUSED) {
 	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
 	 * XXX:       to add infinite loop here before
 	 * XXX:       implementing the process_wait. */
+	sema_down(&sema);
+	
+	
 	return -1;
 }
 
@@ -215,7 +227,7 @@ process_exit (void) {
 	 * TODO: Implement process termination message (see
 	 * TODO: project2/process_termination.html).
 	 * TODO: We recommend you to implement process resource cleanup here. */
-
+	sema_up(&sema);
 	process_cleanup ();
 }
 
@@ -328,25 +340,25 @@ load (const char *fn, struct intr_frame *if_) {
 	off_t file_ofs;
 	bool success = false;
 	int i;
-	
+
 	//////////////////////////Implement argument passing////////////////////////////
-	char fn_copy[64], *file_name;
-	strlcpy(fn_copy, fn, strlen(fn)+1);
+	char fn_copy[128], *file_name;
+	strlcpy(fn_copy, fn, sizeof(fn_copy));
 	char *bookmark;
 	char *argv_token[128];
 
 	// 첫번째 토큰과 인덱스
 	char *token = strtok_r(fn_copy, " ", &bookmark); 
-	int argc=0, i = 0;
-	
-	while (token != NULL){
-		argv_token[i] = token;
-		token = strtok_r(NULL, " ", &bookmark);
-		argc++;
-	}
+	argv_token[0] = token;
+
+	int argc= 1;
 	if (argv_token[0] == NULL)
 		goto done;
 	
+	while ((token = strtok_r(NULL, " ", &bookmark)) != NULL){
+		argv_token[argc] = token;
+		argc++;
+	}
 	file_name = argv_token[0];
 	//////////////////////////Implement argument passing////////////////////////////
 
@@ -439,15 +451,14 @@ load (const char *fn, struct intr_frame *if_) {
 
 	// word DATA PUSH
 	char *argv_addr[128]; //
-	for (i = argc-1; i >= 0; i--){
+	for (i = argc -1; i >= 0; i--){
 
 		if_->rsp -= strlen(argv_token[i]) + 1;
-		memcpy(if_->rsp, argv_token[i], strlen(argv_token[i])+1);
 		argv_addr[i] = if_->rsp;
+		memcpy(if_->rsp, argv_token[i], strlen(argv_token[i])+1);
 	}
 	//----------------PADDING PUSH-------------------
 	if(if_->rsp % 8){
-
 		uint64_t padding = if_->rsp % 8; //uint
 		if_->rsp -= padding;
 		memset(if_->rsp, 0, padding); //memset 사용 
@@ -458,6 +469,7 @@ load (const char *fn, struct intr_frame *if_) {
 	for (i = argc; i >= 0; i--)
 	{
 		if_->rsp -= 8;
+
 		if(i==argc)
 			*(uint64_t *)if_->rsp = 0; // = memset(if_->rsp, 0, 8)
 		else
@@ -465,12 +477,12 @@ load (const char *fn, struct intr_frame *if_) {
 	}	
 	
 	// 레지스터:  %rsi = argv[0] , %rdi = argc
-	if_->R.rsi = argv_addr[0];
+	if_->R.rsi = if_->rsp;
 	if_->R.rdi = argc;
 
 	// return address
 	if_->rsp -= 8;
-	memset(if_->rsp, 0, 8);
+	*(uint64_t *)if_->rsp = 0;
 
 	////////////////////////////////////Push Stack///////////////////////////////////
 	success = true;
