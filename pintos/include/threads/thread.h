@@ -9,6 +9,44 @@
 #include "vm/vm.h"
 #endif
 
+typedef int fixed_t;
+
+#define F (1 << 14)
+
+/* Convert integer to fixed point */
+#define INT_TO_FP(n) ((n) * F)
+
+/* Convert fixed point to integer (truncate) */
+#define FP_TO_INT(x) ((x) / F)
+
+/* Convert fixed point to integer (round to nearest) */
+#define FP_TO_INT_ROUND(x) ((x) >= 0 ? ((x) + F / 2) / F : ((x) - F / 2) / F)
+
+/* Add fixed + fixed */
+#define FP_ADD(x, y) ((x) + (y))
+
+/* Add fixed + int */
+#define FP_ADD_INT(x, n) ((x) + (n) * F)
+
+/* Sub fixed - fixed */
+#define FP_SUB(x, y) ((x) - (y))
+
+/* Sub fixed - int */
+#define FP_SUB_INT(x, n) ((x) - (n) * F)
+
+/* Mul fixed * fixed */
+#define FP_MUL(x, y) ((fixed_t)(((int64_t)(x)) * (y) / F))
+
+/* Mul fixed * int */
+#define FP_MUL_INT(x, n) ((x) * (n))
+
+/* Div fixed / fixed */
+#define FP_DIV(x, y) ((fixed_t)(((int64_t)(x)) * F / (y)))
+
+/* Div fixed / int */
+#define FP_DIV_INT(x, n) ((x) / (n))
+#define FP_DIV_INT_ZERO(x, n) ((n) == 0 ? 0 : (x) / (n))
+
 /* States in a thread's life cycle. */
 enum thread_status
 {
@@ -111,7 +149,6 @@ struct thread
 	// 어떤 락을 기다리고있는지 처음에는 NULL
 	struct lock *waiting_on;
 
-
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */
 	uint64_t *pml4; /* Page map level 4 */
@@ -122,8 +159,11 @@ struct thread
 #endif
 
 	/* Owned by thread.c. */
-	struct intr_frame tf; /* Information for switching */
-	unsigned magic;		  /* Detects stack overflow. */
+	struct intr_frame tf;	  /* Information for switching */
+	unsigned magic;			  /* Detects stack overflow. */
+	int nice;				  /* MLFQS nice 값 */
+	fixed_t recent_cpu;		  /* 최근 CPU 사용량 */
+	struct list_elem allelem; /* 모든 스레드 리스트용 */
 };
 
 /* If false (default), use round-robin scheduler.
@@ -169,7 +209,7 @@ void thread_check_sleepers(int64_t current_ticks);
 
 void thread_sleep(int64_t awake_tick);
 void thread_wake_up(int64_t current_ticks);
-int priority_less (const struct list_elem *a,
-                   const struct list_elem *b, void *aux); 
+int priority_less(const struct list_elem *a,
+				  const struct list_elem *b, void *aux);
 
 #endif /* threads/thread.h */

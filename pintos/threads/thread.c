@@ -15,44 +15,6 @@
 #include "userprog/process.h"
 #endif
 
-typedef int fixed_t;
-
-#define F (1 << 14)
-
-/* Convert integer to fixed point */
-#define INT_TO_FP(n) ((n) * F)
-
-/* Convert fixed point to integer (truncate) */
-#define FP_TO_INT(x) ((x) / F)
-
-/* Convert fixed point to integer (round to nearest) */
-#define FP_TO_INT_ROUND(x) ((x) >= 0 ? ((x) + F / 2) / F : ((x) - F / 2) / F)
-
-/* Add fixed + fixed */
-#define FP_ADD(x, y) ((x) + (y))
-
-/* Add fixed + int */
-#define FP_ADD_INT(x, n) ((x) + (n) * F)
-
-/* Sub fixed - fixed */
-#define FP_SUB(x, y) ((x) - (y))
-
-/* Sub fixed - int */
-#define FP_SUB_INT(x, n) ((x) - (n) * F)
-
-/* Mul fixed * fixed */
-#define FP_MUL(x, y) ((fixed_t)(((int64_t)(x)) * (y) / F))
-
-/* Mul fixed * int */
-#define FP_MUL_INT(x, n) ((x) * (n))
-
-/* Div fixed / fixed */
-#define FP_DIV(x, y) ((fixed_t)(((int64_t)(x)) * F / (y)))
-
-/* Div fixed / int */
-#define FP_DIV_INT(x, n) ((x) / (n))
-#define FP_DIV_INT_ZERO(x, n) ((n) == 0 ? 0 : (x) / (n))
-
 /* Random value for struct thread's `magic' member.
    Used to detect stack overflow.  See the big comment at the top
    of thread.h for details. */
