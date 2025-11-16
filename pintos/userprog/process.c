@@ -198,6 +198,7 @@ error:
 
 /* Switch the current execution context to the f_name.
  * Returns -1 on fail. */
+// 기존 프로그램을 메모리, 코드, 스택을 변경하는 과정
 int process_exec(void *f_name)
 {
 	char *file_name = f_name;
@@ -206,24 +207,33 @@ int process_exec(void *f_name)
 	/* We cannot use the intr_frame in the thread structure.
 	 * This is because when current thread rescheduled,
 	 * it stores the execution information to the member. */
+	// 기존 현재 스레드의 메모리를 다 날려버릴 것이기 때문에 지역변수로 선언
 	struct intr_frame _if;
+	/* ds, es, ss: 데이터 세그먼트 (유저 데이터 영역 SEL_UDSEG) */
 	_if.ds = _if.es = _if.ss = SEL_UDSEG;
+	/* cs: 코드 세그먼트 (유저 코드 영역 SEL_UCSEG) */
 	_if.cs = SEL_UCSEG;
+	/* eflags: 인터럽트 허용 플래그 */
 	_if.eflags = FLAG_IF | FLAG_MBS;
 
 	/* We first kill the current context */
+	/*현재 프로세스의 페이지 테이블(pml4)을 지우기 */
 	process_cleanup();
 
 	/* And then load the binary */
+	/*file_name 실행 파일을 읽어 메모리에 올린다.*/
 	success = load(file_name, &_if);
 
 	/* If load failed, quit. */
+	/*새 프로그램의 시작점 정보가 담깁 , 실패시 오류 처리*/
 	palloc_free_page(file_name);
 	if (!success)
 		return -1;
 
 	/* Start switched process. */
+	/* Context Switching*/
 	do_iret(&_if);
+	/* do_iret이 성공하면 이 줄은 절대 실행되지 않습니다.*/
 	NOT_REACHED();
 }
 
