@@ -1,9 +1,12 @@
 #include "userprog/syscall.h"
 #include <stdio.h>
 #include <syscall-nr.h>
+#include "filesys/filesys.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "threads/synch.h"
 #include "threads/loader.h"
+#include "userprog/process.h"
 #include "userprog/gdt.h"
 #include "threads/flags.h"
 #include "intrinsic.h"
@@ -12,6 +15,8 @@
 #include "threads/mmu.h"   // pml4_get_page() 사용
 #include <stdint.h>
 #include "threads/palloc.h"
+
+static struct lock filesys_lock; // 2. 락 변수 정의 (실제 재료)
 
 void syscall_entry(void);
 void syscall_handler(struct intr_frame *);
@@ -30,7 +35,6 @@ void syscall_handler(struct intr_frame *);
 #define MSR_SYSCALL_MASK 0xc0000084 /* Mask for the eflags */
 
 /////////////////////////////////////////////////////////////////////
-void syscall_init(void);
 
 void syscall_handler(struct intr_frame *f UNUSED);
 // 시스템 콜: Pintos 종료
@@ -41,6 +45,9 @@ void sys_exit(int status);
 int sys_exec(const char *cmd_line);
 
 int sys_write(int fd, const void *buffer, unsigned size);
+// 시스템 콜 : create()
+bool sys_create(const char *file, unsigned size);
+
 /////////////////////////////////////////////////////////////////////
 
 // 유저가 제공한 포인터(주소)가 유효한지 검사
@@ -64,10 +71,12 @@ static void check_buffer(const void *buffer, unsigned size)
 
 /////////////////////////////////////////////////////////////////////
 
-/////////////////////////////////////////////////////////////////////
-
 void syscall_init(void)
 {
+
+	// 파일 시스템 락 초기화
+	lock_init(&filesys_lock);
+
 	// 의미1. 유저가 syscall을 부르면, CPU는 커널 모드로 전환 , 코드 실행 권한은 SEL_KCSEG
 	// 의미2. 커널이 sysret을 실행하면, CPU는 유저 모드로 복귀 , 코드 실행 권한은 SEL_UCSEG
 	write_msr(MSR_STAR, ((uint64_t)SEL_UCSEG - 0x10) << 48 | ((uint64_t)SEL_KCSEG) << 32);
@@ -118,6 +127,27 @@ void syscall_handler(struct intr_frame *f UNUSED)
 
 		// 3. 쓰기 요청 및 결과값 rax에 저장
 		f->R.rax = sys_write(fd, buffer, size);
+		break;
+	}
+	case SYS_WAIT:
+	{
+		// 1. User Program이 기다리고 싶어하는 자식 PID를 rdi 레지스터로 전달받기
+		tid_t pid = f->R.rdi;
+
+		// 2. process_wait() 수행 후, 결과를 status 받기
+		int status = process_wait(pid);
+		break;
+	}
+	case SYS_CREATE:
+	{
+		// 1. 유저 프로그램에서 보낸 file명과 file 초기 크기 레지스터로 전달받기
+		const char *file = (const char *)f->R.rdi;
+
+		unsigned initial_size = f->R.rsi;
+
+		// 2. sys_create 호출 후, 결과값 rax 레지스터에 저장
+		f->R.rax = sys_create(file, initial_size);
+
 		break;
 	}
 	case SYS_EXIT:
@@ -196,6 +226,23 @@ int sys_exec(const char *cmd_line)
 	NOT_REACHED();
 
 	return -1;
+}
+
+bool sys_create(const char *file, unsigned size)
+{
+	// 1. user 프로그램이 보낸 주소 유효성 검사
+	check_address(file);
+
+	// 2. 파일 시스템은 thread가 안전하지 않음 -> 락 필요
+	lock_acquire(&filesys_lock);
+
+	// 3. 실제 파일 생성
+	bool success = filesys_create(file, size);
+
+	// 4. 락 해제
+	lock_release(&filesys_lock);
+
+	return success;
 }
 
 /* System call numbers. */
