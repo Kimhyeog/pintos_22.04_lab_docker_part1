@@ -15,6 +15,7 @@
 #include "threads/mmu.h"   // pml4_get_page() 사용
 #include <stdint.h>
 #include "threads/palloc.h"
+#include "filesys/file.h"
 
 static struct lock filesys_lock; // 2. 락 변수 정의 (실제 재료)
 
@@ -51,6 +52,8 @@ bool sys_create(const char *file, unsigned size);
 int sys_open(const char *file);
 
 void sys_close(int fd);
+
+bool sys_remove(const char *file_name);
 
 /////////////////////////////////////////////////////////////////////
 
@@ -169,6 +172,10 @@ void syscall_handler(struct intr_frame *f UNUSED)
 	}
 	case SYS_REMOVE:
 	{
+		const char *file_name = (const char *)f->R.rdi;
+
+		f->R.rax = sys_remove(file_name);
+
 		break;
 	}
 	case SYS_OPEN:
@@ -219,20 +226,39 @@ void sys_exit(int status)
 
 int sys_write(int fd, const void *buffer, unsigned size)
 {
+
+	int byte_written = -1;
 	// 1. 쓰기 전 주소 검사하는게 좋다.
 	check_buffer(buffer, size);
 	// 2. 표준 출력(콘솔)인 경우
-	if (fd == STDOUT_FILENO)
+	if (fd == 1)
 	{
 		putbuf(buffer, size); // 콘솔에 문자열 출력
 		// 역할1 : putbuf는 size로 지정된 여러 바이트(문자열)를 한 번에 처리합니다.
 		// 역할2 : putbuf는 내부적으로 락(lock)을 사용하거나 인터럽트를 제어
 		// -> 여러 프로세스가 동시에 printf를 호출해도 출력이 섞이지 않도록 보장
 
-		return size; // 쓴 바이트 수만큼 반환
+		// 쓴 바이트 수만큼 반환
+		byte_written = size;
 	}
-	// 3. 그 외(파일 쓰기 등)는 아직 미구현 -> -1 반환
-	return -1;
+	// 3. 그 외(파일 쓰기 등)
+	else if (fd >= 2 && fd < FDT_SIZE)
+	{
+		// 현재 쓰레드의 FDT에 해당하는 file 포인터 추출
+		struct thread *cur = thread_current();
+		struct file *file_obj = cur->fd_table[fd];
+
+		// file NULL인지 check
+		if (file_obj == NULL)
+			return -1;
+
+		// 파일 쓰기 요청
+		lock_acquire(&filesys_lock);
+		byte_written = file_write(file_obj, buffer, size);
+		lock_release(&filesys_lock);
+	}
+
+	return byte_written;
 }
 
 int sys_exec(const char *cmd_line)
@@ -334,6 +360,21 @@ void sys_close(int fd)
 	// 5. thread의 FDT에서 해당 fd의 파일 삭제
 	cur->fd_table[fd] = NULL;
 }
+
+bool sys_remove(const char *file_name)
+{
+	// 1. 문자열 전체 유효성 검사
+	check_string(file_name);
+	// 2. 락 걸기
+	lock_acquire(&filesys_lock);
+	// 3. filesys_remove() 결과 반환
+	bool result = filesys_remove(file_name);
+	// 4. 락 해제
+	lock_release(&filesys_lock);
+	// 5. 결과 반환
+	return result;
+}
+
 /* System call numbers. */
 // enum
 // {
