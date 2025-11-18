@@ -45,6 +45,8 @@ void sys_exit(int status);
 // 시스템 콜 : 현재 프로세스 실행
 int sys_exec(const char *cmd_line);
 
+int sys_read(int fd, const void *buffer, unsigned size);
+
 int sys_write(int fd, const void *buffer, unsigned size);
 // 시스템 콜 : create()
 bool sys_create(const char *file, unsigned size);
@@ -132,6 +134,16 @@ void syscall_handler(struct intr_frame *f UNUSED)
 
 		// 2. 그 명령어로 sys_exec() 호출 및 결과값 레지스터 rax에 저장
 		f->R.rax = sys_exec(cmd_line);
+
+		break;
+	}
+	case SYS_READ:
+	{
+		int fd = f->R.rdi;
+		void *buffer = (void *)f->R.rsi;
+		unsigned size = f->R.rdx;
+
+		f->R.rax = sys_read(fd, buffer, size);
 
 		break;
 	}
@@ -373,6 +385,44 @@ bool sys_remove(const char *file_name)
 	lock_release(&filesys_lock);
 	// 5. 결과 반환
 	return result;
+}
+
+int sys_read(int fd, const void *buffer, unsigned size)
+{
+	// 1. 버퍼 유효성 검사
+	check_buffer(buffer, size);
+
+	// 2. fd==0일 시, 키보드 입력
+	if (fd == STDIN_FILENO)
+	{
+		char *buf_ptr = (char *)buffer;
+
+		for (unsigned i = 0; i < size; i++)
+		{
+			char c = input_getc();
+			if (c == '\r')
+				c = '\n';
+			buf_ptr[i] = c;
+		}
+		return size;
+	}
+	else if (fd >= 2 && fd < FDT_SIZE)
+	{
+		int byte_read_size = -1;
+		struct thread *cur = thread_current();
+		struct file *file_obj = cur->fd_table[fd];
+
+		if (file_obj == NULL)
+			return -1;
+
+		lock_acquire(&filesys_lock);
+		byte_read_size = file_read(file_obj, buffer, size);
+		lock_release(&filesys_lock);
+
+		return byte_read_size;
+	}
+
+	return -1;
 }
 
 /* System call numbers. */
