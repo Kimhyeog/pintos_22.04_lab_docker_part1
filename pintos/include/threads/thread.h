@@ -11,6 +11,9 @@
 
 typedef int fixed_t;
 
+// 파일 디스크립터 테이블
+#define FDT_SIZE 128
+
 #define F (1 << 14)
 
 /* Convert integer to fixed point */
@@ -164,6 +167,8 @@ struct thread
 	int nice;				  /* MLFQS nice 값 */
 	fixed_t recent_cpu;		  /* 최근 CPU 사용량 */
 	struct list_elem allelem; /* 모든 스레드 리스트용 */
+
+	struct file *fd_table[FDT_SIZE];
 };
 
 /* If false (default), use round-robin scheduler.

@@ -48,16 +48,18 @@ int sys_write(int fd, const void *buffer, unsigned size);
 // 시스템 콜 : create()
 bool sys_create(const char *file, unsigned size);
 
+int sys_open(const char *file);
+
 /////////////////////////////////////////////////////////////////////
 
 // 유저가 제공한 포인터(주소)가 유효한지 검사
 static void check_address(const void *uaddr)
 {
-	// 1. 할당된 메모리 주소가 유저영역인지 확인
-	if (!is_user_vaddr(uaddr))
+	// 1. 할당된 메모리 주소가 유저영역인지 확인 &&  NULL인지 확인
+	if (uaddr == NULL || !is_user_vaddr(uaddr))
 		sys_exit(-1);
 
-	// 2. 할당된 메모리가 매핑 유무 및 NULL인지 확인
+	// 2. 할당된 메모리가 매핑 유무
 	if (pml4_get_page(thread_current()->pml4, uaddr) == NULL)
 		sys_exit(-1);
 }
@@ -67,6 +69,19 @@ static void check_buffer(const void *buffer, unsigned size)
 {
 	for (unsigned i = 0; i < size; i++)
 		check_address((const char *)buffer + i);
+}
+
+static void check_string(const char *string)
+{
+	// 1. 첫번째 문자 주소 유효성 검사
+	check_address(string);
+
+	// 2. 그 이후로 계속 검사
+	while (*string != '\0')
+	{
+		string++;
+		check_address(string);
+	}
 }
 
 /////////////////////////////////////////////////////////////////////
@@ -150,6 +165,16 @@ void syscall_handler(struct intr_frame *f UNUSED)
 
 		break;
 	}
+	case SYS_REMOVE:
+	{
+		break;
+	}
+	case SYS_OPEN:
+	{
+		const char *file = (const char *)f->R.rdi;
+		f->R.rax = sys_open(file);
+		break;
+	}
 	case SYS_EXIT:
 	{
 		// 1. rdi 레지스터에 담겨있는 thread의 상태를 꺼낸다.
@@ -165,9 +190,6 @@ void syscall_handler(struct intr_frame *f UNUSED)
 		sys_exit(-1);
 		break;
 	}
-
-	// printf("system call!\n");
-	// thread_exit();
 }
 
 void sys_halt(void)
@@ -195,7 +217,11 @@ int sys_write(int fd, const void *buffer, unsigned size)
 	if (fd == STDOUT_FILENO)
 	{
 		putbuf(buffer, size); // 콘솔에 문자열 출력
-		return size;		  // 쓴 바이트 수만큼 반환
+		// 역할1 : putbuf는 size로 지정된 여러 바이트(문자열)를 한 번에 처리합니다.
+		// 역할2 : putbuf는 내부적으로 락(lock)을 사용하거나 인터럽트를 제어
+		// -> 여러 프로세스가 동시에 printf를 호출해도 출력이 섞이지 않도록 보장
+
+		return size; // 쓴 바이트 수만큼 반환
 	}
 	// 3. 그 외(파일 쓰기 등)는 아직 미구현 -> -1 반환
 	return -1;
@@ -243,6 +269,39 @@ bool sys_create(const char *file, unsigned size)
 	lock_release(&filesys_lock);
 
 	return success;
+}
+
+int sys_open(const char *file)
+{
+
+	// 1. file 유효성 검사
+	check_string(file);
+	// 2. 락 걸기 → file 열기 과정 → 락 해제 → 파일 검사
+	lock_acquire(&filesys_lock);
+	struct file *file_obj = filesys_open(file);
+	lock_release(&filesys_lock);
+
+	// 추가 : file_obj가 생성이 실패 시, -> -1 반환
+	// 즉, 인자로 들어온 file 명이 빈 문자열일 시,
+	if (file_obj == NULL)
+		return -1;
+
+	// 3. 현재 thread 갖고와서, FDT에 등록 및 파일 열기 성공이므로, fd 반환
+	// 참고_ Pintos 명세서와 기본 C 라이브러리는 fd = 0 (STDIN)과 fd = 1 (STDOUT)만 **커널이 특별 취급(콘솔 예약)**하도록 정의
+	struct thread *cur = thread_current();
+
+	for (int fd = 2; fd < FDT_SIZE; fd++)
+		if (cur->fd_table[fd] == NULL)
+		{
+			cur->fd_table[fd] = file_obj;
+			return fd;
+		}
+
+	// 4. 파일 열기 실패 -> file_close()
+	file_close(file_obj);
+
+	// 5. return -1;
+	return -1;
 }
 
 /* System call numbers. */

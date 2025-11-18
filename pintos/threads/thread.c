@@ -712,6 +712,10 @@ init_thread(struct thread *t, const char *name, int priority)
 	t->original_priority = priority;
 	list_init(&t->donations);
 	t->waiting_on = NULL;
+
+	// thread의 File Discriptor 배열 초기화
+	for (int i = 0; i < FDT_SIZE; i++)
+		t->fd_table[i] = NULL;
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should
