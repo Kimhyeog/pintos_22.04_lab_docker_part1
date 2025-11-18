@@ -50,6 +50,8 @@ bool sys_create(const char *file, unsigned size);
 
 int sys_open(const char *file);
 
+void sys_close(int fd);
+
 /////////////////////////////////////////////////////////////////////
 
 // 유저가 제공한 포인터(주소)가 유효한지 검사
@@ -173,6 +175,12 @@ void syscall_handler(struct intr_frame *f UNUSED)
 	{
 		const char *file = (const char *)f->R.rdi;
 		f->R.rax = sys_open(file);
+		break;
+	}
+	case SYS_CLOSE:
+	{
+		int fd = f->R.rdi;
+		sys_close(fd);
 		break;
 	}
 	case SYS_EXIT:
@@ -304,6 +312,28 @@ int sys_open(const char *file)
 	return -1;
 }
 
+void sys_close(int fd)
+{
+	// 1. 해당 close할 파일이 fd 범위 외라면, 종료
+	if (fd < 2 || fd >= FDT_SIZE)
+		sys_exit(-1);
+
+	// 2. 현재 thread의 FDT에서 fd에 해당되는 파일 추출
+	struct thread *cur = thread_current();
+	struct file *file_obj = cur->fd_table[fd];
+
+	// 3. NULL file일 경우 종료
+	if (file_obj == NULL)
+		sys_exit(-1);
+
+	// 4. close 과정 시작
+	lock_acquire(&filesys_lock);
+	file_close(file_obj);
+	lock_release(&filesys_lock);
+
+	// 5. thread의 FDT에서 해당 fd의 파일 삭제
+	cur->fd_table[fd] = NULL;
+}
 /* System call numbers. */
 // enum
 // {
