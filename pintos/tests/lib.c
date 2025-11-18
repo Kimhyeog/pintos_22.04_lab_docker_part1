@@ -124,7 +124,6 @@ check_file_handle (int fd,
   if (file_size != size)
     msg ("size of %s (%zu) differs from expected (%zu)",
           file_name, file_size, size);
-
   /* Read the file block-by-block, comparing data as we go. */
   while (ofs < size)
     {
@@ -144,6 +143,7 @@ check_file_handle (int fd,
       ofs += block_size;
     }
 
+  
   /* Now fail due to wrong file size. */
   if (file_size != size)
     fail ("size of %s (%zu) differs from expected (%zu)",

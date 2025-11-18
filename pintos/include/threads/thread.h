@@ -111,6 +111,9 @@ struct thread
 	// 어떤 락을 기다리고있는지 처음에는 NULL
 	struct lock *waiting_on;
 
+	int exit_status;
+
+	struct file *fd_table[128];
 
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */
