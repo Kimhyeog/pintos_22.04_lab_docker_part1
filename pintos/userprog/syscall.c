@@ -45,7 +45,7 @@ void sys_exit(int status);
 // 시스템 콜 : 현재 프로세스 실행
 int sys_exec(const char *cmd_line);
 
-int sys_read(int fd, const void *buffer, unsigned size);
+int sys_read(int fd, void *buffer, unsigned size);
 
 int sys_write(int fd, const void *buffer, unsigned size);
 // 시스템 콜 : create()
@@ -56,6 +56,8 @@ int sys_open(const char *file);
 void sys_close(int fd);
 
 bool sys_remove(const char *file_name);
+
+int sys_filesize(int fd);
 
 /////////////////////////////////////////////////////////////////////
 
@@ -137,6 +139,9 @@ void syscall_handler(struct intr_frame *f UNUSED)
 
 		break;
 	}
+	case SYS_FILESIZE: // 8번
+		f->R.rax = sys_filesize(f->R.rdi);
+		break;
 	case SYS_READ:
 	{
 		int fd = f->R.rdi;
@@ -340,7 +345,11 @@ int sys_open(const char *file)
 	struct thread *cur = thread_current();
 
 	if (cur->fd_table == NULL)
+	{
+		file_close(file_obj);		 // 1. 파일 닫기
+		lock_release(&filesys_lock); // 2. 락 해제
 		return -1;
+	}
 
 	int fd = 2;
 	while (fd < FDT_SIZE)
@@ -401,7 +410,7 @@ bool sys_remove(const char *file_name)
 	return result;
 }
 
-int sys_read(int fd, const void *buffer, unsigned size)
+int sys_read(int fd, void *buffer, unsigned size)
 {
 	// 1. 버퍼 유효성 검사
 	check_buffer(buffer, size);
@@ -437,6 +446,29 @@ int sys_read(int fd, const void *buffer, unsigned size)
 	}
 
 	return -1;
+}
+int sys_filesize(int fd)
+{
+	struct thread *curr = thread_current();
+
+	// fd 유효성 검사
+	if (fd < 2 || fd >= FDT_SIZE)
+		return -1;
+
+	if (curr->fd_table == NULL)
+		return -1;
+
+	struct file *file_obj = curr->fd_table[fd];
+
+	if (file_obj == NULL)
+		return -1;
+
+	// 락을 걸고 파일 길이 가져오기
+	lock_acquire(&filesys_lock);
+	int length = file_length(file_obj);
+	lock_release(&filesys_lock);
+
+	return length;
 }
 
 /* System call numbers. */
