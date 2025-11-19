@@ -11,6 +11,8 @@
 #include "threads/synch.h"
 #include "threads/vaddr.h"
 #include "intrinsic.h"
+#include "filesys/file.h"
+#include "filesys/filesys.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif

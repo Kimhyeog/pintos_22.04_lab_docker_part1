@@ -10,6 +10,7 @@
 #include "threads/synch.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
+#include "userprog/process.h";
 
 void syscall_entry (void);
 void syscall_handler (struct intr_frame *);
@@ -22,6 +23,7 @@ void check_valid_address(char *address);
 void sys_close (int fd);
 int sys_read (int fd, void *buffer, unsigned size);
 int sys_filesize (int fd);
+tid_t sys_fork (const char *thread_name, struct intr_frame *f);
 // int exec (const char *cmd_line);
 // pid_t fork (const char *);
 // int wait (pid_t);
@@ -61,11 +63,21 @@ void syscall_handler (struct intr_frame *f UNUSED) {
 	int status = f->R.rax;
 	
 	switch (status) {
-		case SYS_WRITE:
-			size_t num = sys_write(f->R.rdi, (void *)f->R.rsi, f->R.rdx);
-			f->R.rax = num;
-			break;
+		case SYS_WRITE: {
+			int fd = f->R.rdi;
+			check_valid_string((char *)f->R.rsi);
+			if (fd < 0 || fd >= 128) {
+				thread_current()->exit_status = -1;
+				thread_exit();
+			}
 
+			lock_acquire(&file_create_look);
+			size_t num = sys_write(fd, (void *)f->R.rsi, f->R.rdx);
+			f->R.rax = num;
+			lock_release(&file_create_look);
+
+			break;
+		}
 		case SYS_EXIT:
 			int exit_status = f->R.rdi;
 			thread_current()->exit_status = exit_status;
@@ -128,7 +140,7 @@ void syscall_handler (struct intr_frame *f UNUSED) {
 			void *buffer = f->R.rsi;
 			unsigned size = f->R.rdx;
 
-			check_valid_address(buffer);
+			check_valid_address(buffer); 
 
 			if (size > 0) {
 				check_valid_address(buffer + size - 1);
@@ -158,10 +170,21 @@ void syscall_handler (struct intr_frame *f UNUSED) {
             lock_release(&file_create_look); 
 			break;
 			
+		case SYS_FORK: {
+			char *thread_name = f->R.rdi;
+			f->R.rax = sys_fork (thread_name, f);
+
+			break;	
+		}	
+		
+		case SYS_WAIT: {
+			f->R.rax = process_wait(f->R.rdi);
+			break;
+		}
+		
 		default:
 			break;
 	}
-
 }
 
 int sys_write (int fd, const void *buffer, unsigned size) {
@@ -170,17 +193,19 @@ int sys_write (int fd, const void *buffer, unsigned size) {
     }
 
     if (fd == 1) {
-        lock_acquire(&file_create_look);
         putbuf(buffer, size);
-        lock_release(&file_create_look);
-        
         return size;
     }
 
-    // TODO: fd가 1이 아닐 때 (파일에 쓸 때) 로직 구현 필요
-    // 이 경우에도 락이 필요합니다.
+	struct thread *current = thread_current();
+	struct file *file = current->fd_table[fd];
 
-    return -1; // 아직 파일 쓰기 미구현
+	if (file == NULL) {
+		return 0;
+	}
+
+	int result = file_write (file, buffer, size);
+    return result; 
 }
 
 void halt(void) {
@@ -199,7 +224,6 @@ int sys_open (const char *file_name) {
 	int i = 2;
 	for (; i < 128; i++) {
 		if (fd_table[i] == NULL) {
-
 			fd_table[i] = open_file;
 			success = true;
 			break;
@@ -211,11 +235,10 @@ int sys_open (const char *file_name) {
         return -1;
 	}
 
-
 	return i;
 }
 
-void check_valid_string(char *address) {
+void check_valid_string(char *address) { 
 	while (true) {
 		if (address == NULL || is_kernel_vaddr(address) || pml4_get_page(thread_current()->pml4, address) == NULL) {
 			thread_current()->exit_status = -1;
@@ -230,12 +253,11 @@ void check_valid_string(char *address) {
 	}
 }
 
-void check_valid_address(char *address) {
+void check_valid_address(char *address) {// 처음과 끝만 확인 vs 다 확인 vs 끝만 확인
 	if (address == NULL || is_kernel_vaddr(address) || pml4_get_page(thread_current()->pml4, address) == NULL) {
 		thread_current()->exit_status = -1;
 		thread_exit();
 	}
-
 }
 
 void sys_close (int fd) {
@@ -246,7 +268,6 @@ void sys_close (int fd) {
 	if (file == NULL) {
 		return;
 	}
-
 
     file_close(file); 
 	current->fd_table[fd] = NULL;
@@ -259,23 +280,20 @@ int sys_read (int fd, void *buffer, unsigned size) {
 
 	if (fd == 0) {
 		char *cur = buffer;
-
 		for (int i = 0; i < size; i++) {
 			*cur = input_getc();
 			cur++;
 		}
 
-		return size;
-
+		return size; // size만큼 꼭 써야하는가?
 	}
 
-	if (buffer == NULL) {
+	if (buffer == NULL) { 
 		return -1;
 	}
 
 	struct thread *current = thread_current();
 	struct file **fd_table = current->fd_table;
-
 	struct file *read_file = fd_table[fd];
 
 	if (read_file == NULL) {
@@ -294,5 +312,10 @@ int sys_filesize (int fd) {
 		return -1;
 	}
 
-	return file_length(file);
+	int result = file_length(file);
+	return result;
+}
+
+tid_t sys_fork (const char *thread_name, struct intr_frame *f) {	
+	return process_fork(thread_name, f);
 }

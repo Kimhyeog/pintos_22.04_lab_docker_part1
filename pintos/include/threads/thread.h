@@ -113,7 +113,7 @@ struct thread
 
 	int exit_status;
 
-	struct file *fd_table[128];
+	struct file **fd_table;
 
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */
