@@ -259,10 +259,19 @@ int process_wait(tid_t child_tid UNUSED)
 void process_exit(void)
 {
 	struct thread *curr = thread_current();
-	/* TODO: Your code goes here.
-	 * TODO: Implement process termination message (see
-	 * TODO: project2/process_termination.html).
-	 * TODO: We recommend you to implement process resource cleanup here. */
+
+	/* 열린 파일 모두 닫기*/
+	for (unsigned i = 0; i < FDT_SIZE; i++)
+	{
+		if (curr->fd_table[i] != NULL)
+		{
+			file_close(curr->fd_table[i]);
+			curr->fd_table[i] = NULL;
+		}
+	}
+	/* 2. 현재 실행 중인 파일 닫기 (Project 2 rox 관련) */
+
+	/* 3. 배열 자체 메모리 해제는 하지 않음! (X) */
 
 	process_cleanup();
 }
