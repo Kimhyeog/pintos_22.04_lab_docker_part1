@@ -168,7 +168,7 @@ struct thread
 	fixed_t recent_cpu;		  /* 최근 CPU 사용량 */
 	struct list_elem allelem; /* 모든 스레드 리스트용 */
 
-	struct file *fd_table[FDT_SIZE];
+	struct file **fd_table;
 };
 
 /* If false (default), use round-robin scheduler.

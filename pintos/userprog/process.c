@@ -1,4 +1,3 @@
-#include "userprog/process.h"
 #include <debug.h>
 #include <inttypes.h>
 #include <round.h>
@@ -6,7 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "userprog/gdt.h"
+#include "userprog/process.h"
 #include "userprog/tss.h"
+#include "userprog/syscall.h"
 #include "filesys/directory.h"
 #include "filesys/file.h"
 #include "filesys/filesys.h"
@@ -260,18 +261,34 @@ void process_exit(void)
 {
 	struct thread *curr = thread_current();
 
-	/* 열린 파일 모두 닫기*/
-	for (unsigned i = 0; i < FDT_SIZE; i++)
+	// [중요] fd_table이 할당된 경우에만 접근
+	if (curr->fd_table != NULL)
 	{
-		if (curr->fd_table[i] != NULL)
+		lock_acquire(&filesys_lock);
+		// 파일 닫기 (0, 1번 제외 안전하게 2번부터)
+		for (int i = 2; i < FDT_SIZE; i++)
 		{
-			file_close(curr->fd_table[i]);
-			curr->fd_table[i] = NULL;
+			if (curr->fd_table[i] != NULL)
+			{
+				file_close(curr->fd_table[i]);
+				curr->fd_table[i] = NULL;
+			}
 		}
-	}
-	/* 2. 현재 실행 중인 파일 닫기 (Project 2 rox 관련) */
+		lock_release(&filesys_lock);
 
-	/* 3. 배열 자체 메모리 해제는 하지 않음! (X) */
+		/* ================================================= */
+		/* [수정] FDT 페이지 메모리 해제 (palloc의 짝꿍) */
+		palloc_free_page(curr->fd_table);
+		curr->fd_table = NULL;
+		/* ================================================= */
+	}
+
+	// 실행 중인 파일 닫기
+	// if (curr->running_file != NULL)
+	// {
+	// 	file_close(curr->running_file);
+	// 	curr->running_file = NULL;
+	// }
 
 	process_cleanup();
 }

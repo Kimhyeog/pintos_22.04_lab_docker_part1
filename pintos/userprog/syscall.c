@@ -17,7 +17,7 @@
 #include "threads/palloc.h"
 #include "filesys/file.h"
 
-static struct lock filesys_lock; // 2. 락 변수 정의 (실제 재료)
+struct lock filesys_lock; // 2. 락 변수 정의 (실제 재료)
 
 void syscall_entry(void);
 void syscall_handler(struct intr_frame *);
@@ -322,32 +322,46 @@ int sys_open(const char *file)
 
 	// 1. file 유효성 검사
 	check_string(file);
+
 	// 2. 락 걸기 → file 열기 과정 → 락 해제 → 파일 검사
 	lock_acquire(&filesys_lock);
 	struct file *file_obj = filesys_open(file);
-	lock_release(&filesys_lock);
 
 	// 추가 : file_obj가 생성이 실패 시, -> -1 반환
 	// 즉, 인자로 들어온 file 명이 빈 문자열일 시,
 	if (file_obj == NULL)
+	{
+		lock_release(&filesys_lock);
 		return -1;
+	}
 
 	// 3. 현재 thread 갖고와서, FDT에 등록 및 파일 열기 성공이므로, fd 반환
 	// 참고_ Pintos 명세서와 기본 C 라이브러리는 fd = 0 (STDIN)과 fd = 1 (STDOUT)만 **커널이 특별 취급(콘솔 예약)**하도록 정의
 	struct thread *cur = thread_current();
 
-	for (int fd = 2; fd < FDT_SIZE; fd++)
+	if (cur->fd_table == NULL)
+		return -1;
+
+	int fd = 2;
+	while (fd < FDT_SIZE)
+	{
+
 		if (cur->fd_table[fd] == NULL)
-		{
-			cur->fd_table[fd] = file_obj;
-			return fd;
-		}
+			break;
 
-	// 4. 파일 열기 실패 -> file_close()
-	file_close(file_obj);
+		fd++;
+	}
 
-	// 5. return -1;
-	return -1;
+	if (fd >= FDT_SIZE)
+	{
+		file_close(file_obj);
+		lock_release(&filesys_lock);
+		return -1;
+	}
+
+	cur->fd_table[fd] = file_obj;
+	lock_release(&filesys_lock);
+	return fd;
 }
 
 void sys_close(int fd)
