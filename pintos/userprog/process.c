@@ -19,6 +19,8 @@
 #include "threads/vaddr.h"
 #include "intrinsic.h"
 #include "threads/synch.h"
+#include "threads/malloc.h"
+#include "list.h"
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -261,14 +263,28 @@ int process_exec (void *f_name) {
  * This function will be implemented in problem 2-2.  For now, it
  * does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) {
-	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
-	 * XXX:       to add infinite loop here before
-	 * XXX:       implementing the process_wait. */
-	 
-	timer_sleep(100);
+process_wait (tid_t child_tid) {
+
+	struct thread *current = thread_current();
+	struct list *child_list = &current->child_list;
+	struct list_elem *e;
+	int exit_status;
+
+	// child_list를 돌면서 child_info의 tid가 같은게 있는지 찾는다.
+	for (e = list_begin(child_list); e != list_end(child_list); e = list_next(e)) {
+		struct child_info *info = list_entry(e, struct child_info, elem);
+		
+		if (info->tid == child_tid) {
+			sema_down(&info->sema);
+			exit_status = info->exit_status;
+			list_remove(e);
+			free(info);
+			return exit_status;
+		}
+	}
+
 	return -1;
-}
+}	
 
 /* Exit the process. This function is called by thread_exit (). */
 void
@@ -299,8 +315,26 @@ process_exit (void) {
 	// 	current->fd_table = NULL;
 	// }
 
+    /* 3. [추가] 부모로서 자식 리스트 정리 (메모리 누수 방지) */
+    // 내가 죽으니까, 내가 관리하던 자식 우체통들을 다 폐기합니다.
+    struct list_elem *e = list_begin(&curr->child_list);
+    while (e != list_end(&curr->child_list)) {
+        struct child_info *info = list_entry(e, struct child_info, elem);
+        e = list_remove(e); // 리스트에서 빼고
+        free(info);         // 메모리 해제 (malloc.h 필요)
+    }
+
 	//args-none: exit(0)
 	printf("%s: exit(%d)\n", curr->name, curr->exit_status);
+
+	/* 2. [수정] 부모에게 종료 상태 전달 */
+    // 반드시 NULL 체크를 해야 합니다 (초기 프로세스 initd는 부모가 없을 수 있음)
+    if (curr->child_info != NULL) {
+        // syscall_handler에서 설정한 값을 그대로 옮겨 적어야 합니다.
+        curr->child_info->exit_status = curr->exit_status; 
+        sema_up(&curr->child_info->sema);
+    }
+	
 	process_cleanup ();
 }
 
