@@ -173,18 +173,38 @@ void syscall_handler(struct intr_frame *f UNUSED)
 		break;
 	}
 	case SYS_FORK:
-	{
-		const char *thread_name = (const char *)f->R.rdi;
-		f->R.rax = sys_fork(thread_name, f);
+		const char *user_name_ptr = (const char *)f->R.rdi;
+
+		// 1. 주소 유효성 검사 (필수)
+		check_address(user_name_ptr);
+
+		// 2. 커널 메모리 할당 및 복사
+		// (이름을 저장할 임시 커널 페이지 할당)
+		char *kernel_name_copy = palloc_get_page(0);
+		if (kernel_name_copy == NULL)
+		{
+			f->R.rax = TID_ERROR;
+			break;
+		}
+
+		// 3. 사용자 문자열을 커널로 안전하게 복사 (strlcpy 사용)
+		// 주의: strlcpy도 page fault를 일으킬 수 있으므로,
+		// 실제로는 사용자 문자열 길이를 체크하거나 안전한 복사 함수를 써야 할 수 있음.
+		strlcpy(kernel_name_copy, user_name_ptr, PGSIZE);
+
+		// 4. 복사된 커널 포인터를 넘김
+		f->R.rax = sys_fork(kernel_name_copy, f);
+
+		// 5. 사용 후 해제
+		palloc_free_page(kernel_name_copy);
 		break;
-	}
 	case SYS_WAIT:
 	{
 		// 1. User Program이 기다리고 싶어하는 자식 PID를 rdi 레지스터로 전달받기
 		tid_t pid = f->R.rdi;
 
 		// 2. process_wait() 수행 후, 결과를 status 받기
-		int status = process_wait(pid);
+		f->R.rax = process_wait(pid);
 		break;
 	}
 	case SYS_CREATE:
@@ -246,7 +266,7 @@ void sys_exit(int status)
 	struct thread *cur = thread_current();
 
 	// [추가 권장] 나중에 process_wait 구현을 위해 필요합니다.
-	// cur->exit_status = status;
+	cur->exit_status = status;
 
 	printf("%s: exit(%d)\n", cur->name, status);
 

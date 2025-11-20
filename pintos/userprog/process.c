@@ -149,6 +149,7 @@ static struct thread *get_child_process(tid_t tid)
 
 	for (e = list_begin(&cur->child_list); e != list_end(&cur->child_list); e = list_next(e))
 	{
+		// list_entry() 마지막 인자 : 그 구조체 안의 멤버 이름
 		struct thread *t = list_entry(e, struct thread, child_elem);
 
 		if (t->tid == tid)
@@ -163,6 +164,9 @@ static struct thread *get_child_process(tid_t tid)
 #ifndef VM
 /* Duplicate the parent's address space by passing this function to the
  * pml4_for_each. This is only for the project 2. */
+// pte : 부모 thread의 Page table Entry , 쓰기 가능한지(W bit), 유저 모드 접근 가능한지(U bit) 등의 정보
+// va : pte를 가리키는 가상 주소 ,자식 프로세스에게 **"어느 주소"**에 메모리를 매핑해 줄지 알려주는 좌표
+// aux : 부모 스레드의 포인터
 static bool duplicate_pte(uint64_t *pte, void *va, void *aux)
 {
 	struct thread *current = thread_current();
@@ -185,7 +189,7 @@ static bool duplicate_pte(uint64_t *pte, void *va, void *aux)
 	if (newpage == NULL)
 		return false; // 메모리 부족 등으로 실패
 
-	/* 4. 내용 복사 (Deep Copy: 부모 그릇의 내용을 자식 그릇에 붓기) */
+	/* 4. 내용 복사 */
 	memcpy(newpage, parent_page, PGSIZE);
 
 	// 4-1. 쓰기 가능 여부 확인 (부모의 PTE에서 권한 비트 확인)
@@ -213,29 +217,35 @@ static void __do_fork(void *aux)
 	struct intr_frame if_;
 	struct thread *parent = (struct thread *)aux; // 이제 aux는 진짜 부모 스레드임
 	struct thread *current = thread_current();
-	/* 부모 스레드 구조체 안에 저장된 parent_if 주소를 가져와야 함 */
+
+	// 1. 부모의 parent_if 멤버 포인터 추출 및 자식에게 전달용 f에 parent_if 복사
 	struct intr_frame *parent_if = &parent->parent_if;
 	memcpy(&if_, parent_if, sizeof(struct intr_frame)); // 복사
+
+	// 2. 복사 성공용 bool success ture
 	bool succ = true;
 
-	// 2. 자식 새끼의 rax에 0 저장 (정상적인 child 성공)
+	// 3. 자식 새끼의 rax에 0 저장 (정상적인 child 성공)
 	if_.R.rax = 0;
 
-	/* 2. Duplicate PT */
+	/* 4. 자식의 페이지 테이블 생성 및 활설화 */
+
 	current->pml4 = pml4_create();
 	if (current->pml4 == NULL)
 		goto error;
 
 	process_activate(current);
+
 #ifdef VM
 	supplemental_page_table_init(&current->spt);
 	if (!supplemental_page_table_copy(&current->spt, &parent->spt))
 		goto error;
 #else
+	// 부모의 페이지 테이블을 뒤지면서, 유효한 유저영역 Entry둘울 duplicate_pte()로 복사
 	if (!pml4_for_each(parent->pml4, duplicate_pte, parent))
 		goto error;
 #endif
-
+	// 5. 부모의 FDT 복사 과정
 	for (int fd = 2; fd < FDT_SIZE; fd++)
 	{
 		struct file *file_obj = parent->fd_table[fd];
@@ -326,12 +336,22 @@ int process_exec(void *f_name)
 int process_wait(tid_t child_tid)
 {
 	// 1. 자식 스레드 찾기
+	struct thread *child = get_child_process(child_tid);
+	if (child == NULL)
+		return -1;
+
 	// 2. 자식이 종료될 때까지 busy waiting (또는 thread_yield)
+	sema_down(&child->wait_sema);
+
 	// 3. 자식이 종료되면 저장해둔 exit_status 반환
-	// 4. 자식의 구조체(메모리) 해제
-	timer_sleep(1000);
+	int status = child->exit_status;
+
+	// 4. 중복 wait 방지
+	list_remove(&child->child_elem);
 	/* 실제 구현 시에는 sema_down(&child->wait_sema) 등을 사용해야 함 */
-	return -1; // 현재는 이렇게 되어 있어서 실패하는 것입니다.
+	sema_up(&child->free_sema);
+
+	return status; // 현재는 이렇게 되어 있어서 실패하는 것입니다.
 }
 
 /* Exit the process. This function is called by thread_exit (). */
@@ -360,15 +380,11 @@ void process_exit(void)
 		curr->fd_table = NULL;
 		/* ================================================= */
 	}
+	sema_up(&curr->wait_sema);
 
-	// 실행 중인 파일 닫기
-	// if (curr->running_file != NULL)
-	// {
-	// 	file_close(curr->running_file);
-	// 	curr->running_file = NULL;
-	// }
+	sema_down(&curr->free_sema);
 
-	process_cleanup();
+	thread_exit();
 }
 
 /* Free the current process's resources. */
