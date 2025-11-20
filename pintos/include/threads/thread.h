@@ -5,6 +5,8 @@
 #include <list.h>
 #include <stdint.h>
 #include "threads/interrupt.h"
+#include "threads/synch.h" // sema 사용을 위해
+#include "filesys/file.h"  // file 구조체 사용을 위해
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -169,6 +171,28 @@ struct thread
 	struct list_elem allelem; /* 모든 스레드 리스트용 */
 
 	struct file **fd_table;
+
+	// 1. 프로세스 종료 상태 저장
+	int exit_status;
+
+	// 2. 자식 프로세스 생성 동기화 (fork)
+	struct semaphore fork_sema;
+
+	// 3. 자식 프로세스 종료 대기 (wait)
+	struct semaphore wait_sema;
+
+	// 4. 자식 프로세스 목록 관리
+	struct list child_list;
+	struct list_elem child_elem;
+
+	// 5. 파일 디스크립터 테이블 (FDT)
+	int fd_idx; // 다음 할당할 fd 인덱스 (선택사항)
+
+	// 6. 현재 실행 중인 파일 (rox: executable file writing 방지)
+	struct file *running_file;
+
+	// 7. 부모 프로세스의 인터럽트 프레임 (fork 시 사용)
+	struct intr_frame parent_if;
 };
 
 /* If false (default), use round-robin scheduler.

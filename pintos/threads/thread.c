@@ -199,8 +199,7 @@ void thread_print_stats(void)
    The code provided sets the new thread's `priority' member to
    PRIORITY, but no actual priority scheduling is implemented.
    Priority scheduling is the goal of Problem 1-3. */
-tid_t thread_create(const char *name, int priority,
-					thread_func *function, void *aux)
+tid_t thread_create(const char *name, int priority, thread_func *function, void *aux)
 {
 	struct thread *t;
 	tid_t tid;
@@ -725,6 +724,19 @@ init_thread(struct thread *t, const char *name, int priority)
 	t->waiting_on = NULL;
 	/* [수정] 그냥 NULL로 초기화만 하세요 */
 	t->fd_table = NULL;
+
+	/* [Project 2 추가 초기화] */
+	t->exit_status = 0; // 초기값 0
+
+	sema_init(&t->fork_sema, 0); // 0으로 초기화 (부모가 기다려야 하므로)
+	sema_init(&t->wait_sema, 0); // 0으로 초기화
+
+	list_init(&t->child_list); // 자식 리스트 초기화
+
+	// FDT 초기화는 thread_create에서 palloc으로 할당하거나 여기서 NULL로 초기화
+	// t->fd_table = NULL;
+
+	t->running_file = NULL;
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should

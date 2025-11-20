@@ -59,6 +59,8 @@ bool sys_remove(const char *file_name);
 
 int sys_filesize(int fd);
 
+tid_t sys_fork(const char *thread_name, struct intr_frame *f);
+
 /////////////////////////////////////////////////////////////////////
 
 // 유저가 제공한 포인터(주소)가 유효한지 검사
@@ -139,9 +141,13 @@ void syscall_handler(struct intr_frame *f UNUSED)
 
 		break;
 	}
-	case SYS_FILESIZE: // 8번
+	case SYS_FILESIZE:
+	{
+
+		// 8번
 		f->R.rax = sys_filesize(f->R.rdi);
 		break;
+	}
 	case SYS_READ:
 	{
 		int fd = f->R.rdi;
@@ -164,6 +170,12 @@ void syscall_handler(struct intr_frame *f UNUSED)
 
 		// 3. 쓰기 요청 및 결과값 rax에 저장
 		f->R.rax = sys_write(fd, buffer, size);
+		break;
+	}
+	case SYS_FORK:
+	{
+		const char *thread_name = (const char *)f->R.rdi;
+		f->R.rax = sys_fork(thread_name, f);
 		break;
 	}
 	case SYS_WAIT:
@@ -471,6 +483,13 @@ int sys_filesize(int fd)
 	return length;
 }
 
+tid_t sys_fork(const char *thread_name, struct intr_frame *f)
+{
+
+	tid_t result = process_fork(thread_name, f);
+
+	return result;
+}
 /* System call numbers. */
 // enum
 // {

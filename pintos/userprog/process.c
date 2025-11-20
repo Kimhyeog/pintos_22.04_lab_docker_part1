@@ -18,6 +18,7 @@
 #include "threads/thread.h"
 #include "threads/mmu.h"
 #include "threads/vaddr.h"
+#include "threads/synch.h"
 #include "intrinsic.h"
 #ifdef VM
 #include "vm/vm.h"
@@ -27,10 +28,11 @@ static void process_cleanup(void);
 static bool load(const char *file_name, struct intr_frame *if_);
 static void initd(void *f_name);
 static void __do_fork(void *);
+/* (헬퍼 함수) tid에 해당하는 자식 스레드 구조체를 찾는 함수 */
+static struct thread *get_child_process(tid_t tid);
 
 /* General process initializer for initd and other process. */
-static void
-process_init(void)
+static void process_init(void)
 {
 	struct thread *current = thread_current();
 }
@@ -111,16 +113,57 @@ initd(void *f_name)
  * TID_ERROR if the thread cannot be created. */
 tid_t process_fork(const char *name, struct intr_frame *if_ UNUSED)
 {
-	/* Clone current thread to new thread.*/
-	return thread_create(name,
-						 PRI_DEFAULT, __do_fork, thread_current());
+
+	struct thread *curr = thread_current();
+
+	// [중요] 부모의 IF를 구조체에 백업 (자식이 가져갈 수 있도록)
+	memcpy(&curr->parent_if, if_, sizeof(struct intr_frame));
+
+	// [수정됨] 4번째 인자로 if_가 아니라 'curr'(부모 스레드 포인터)를 넘겨야 함!
+	tid_t tid = thread_create(name, PRI_DEFAULT, __do_fork, curr);
+
+	if (tid == TID_ERROR)
+		return TID_ERROR;
+
+	// 자식 스레드 구조체 찾기 (직접 구현 필요)
+	struct thread *child = get_child_process(tid);
+
+	if (child == NULL)
+		return TID_ERROR;
+
+	// 부모 thread 재우기
+	sema_down(&child->fork_sema);
+
+	/* 자식 새끼 생성 된 후. 장애인인지 정상 애새끼인지 판정 */
+
+	if (child->exit_status == TID_ERROR)
+		return TID_ERROR;
+
+	return tid;
+}
+
+static struct thread *get_child_process(tid_t tid)
+{
+	struct thread *cur = thread_current();
+	struct list_elem *e;
+
+	for (e = list_begin(&cur->child_list); e != list_end(&cur->child_list); e = list_next(e))
+	{
+		struct thread *t = list_entry(e, struct thread, child_elem);
+
+		if (t->tid == tid)
+		{
+			return t; // 찾았으면 해당 스레드 포인터 반환
+		}
+	}
+
+	return NULL;
 }
 
 #ifndef VM
 /* Duplicate the parent's address space by passing this function to the
  * pml4_for_each. This is only for the project 2. */
-static bool
-duplicate_pte(uint64_t *pte, void *va, void *aux)
+static bool duplicate_pte(uint64_t *pte, void *va, void *aux)
 {
 	struct thread *current = thread_current();
 	struct thread *parent = (struct thread *)aux;
@@ -128,24 +171,35 @@ duplicate_pte(uint64_t *pte, void *va, void *aux)
 	void *newpage;
 	bool writable;
 
-	/* 1. TODO: If the parent_page is kernel page, then return immediately. */
+	/* 1. 만약 커널 주소라면 복사하지 않고 그냥 성공(true) 반환 */
+	if (is_kernel_vaddr(va))
+		return true;
 
-	/* 2. Resolve VA from the parent's page map level 4. */
+	/* 2. 부모의 가상 주소(va)에 매핑된 물리 주소 가져오기 (원본 데이터 위치) */
 	parent_page = pml4_get_page(parent->pml4, va);
+	if (parent_page == NULL)
+		return false; // 뭔가 잘못됨 (유효한 PTE인데 물리 주소가 없다면)
 
-	/* 3. TODO: Allocate new PAL_USER page for the child and set result to
-	 *    TODO: NEWPAGE. */
+	/* 3. 자식을 위한 새 물리 페이지 할당 (새로운 그릇) */
+	newpage = palloc_get_page(PAL_USER);
+	if (newpage == NULL)
+		return false; // 메모리 부족 등으로 실패
 
-	/* 4. TODO: Duplicate parent's page to the new page and
-	 *    TODO: check whether parent's page is writable or not (set WRITABLE
-	 *    TODO: according to the result). */
+	/* 4. 내용 복사 (Deep Copy: 부모 그릇의 내용을 자식 그릇에 붓기) */
+	memcpy(newpage, parent_page, PGSIZE);
 
-	/* 5. Add new page to child's page table at address VA with WRITABLE
-	 *    permission. */
+	// 4-1. 쓰기 가능 여부 확인 (부모의 PTE에서 권한 비트 확인)
+	// (*pte) 값에서 PTE_W 비트가 1인지 확인
+	writable = is_writable(pte);
+
+	/* 5. 자식의 페이지 테이블에 "이 가상 주소(va)는 저 새 물리 주소(newpage)다"라고 등록 */
 	if (!pml4_set_page(current->pml4, va, newpage, writable))
 	{
-		/* 6. TODO: if fail to insert page, do error handling. */
+		/* 6. 매핑 실패 시 할당받은 메모리 반납 */
+		palloc_free_page(newpage);
+		return false;
 	}
+
 	return true;
 }
 #endif
@@ -154,18 +208,18 @@ duplicate_pte(uint64_t *pte, void *va, void *aux)
  * Hint) parent->tf does not hold the userland context of the process.
  *       That is, you are required to pass second argument of process_fork to
  *       this function. */
-static void
-__do_fork(void *aux)
+static void __do_fork(void *aux)
 {
 	struct intr_frame if_;
-	struct thread *parent = (struct thread *)aux;
+	struct thread *parent = (struct thread *)aux; // 이제 aux는 진짜 부모 스레드임
 	struct thread *current = thread_current();
-	/* TODO: somehow pass the parent_if. (i.e. process_fork()'s if_) */
-	struct intr_frame *parent_if;
+	/* 부모 스레드 구조체 안에 저장된 parent_if 주소를 가져와야 함 */
+	struct intr_frame *parent_if = &parent->parent_if;
+	memcpy(&if_, parent_if, sizeof(struct intr_frame)); // 복사
 	bool succ = true;
 
-	/* 1. Read the cpu context to local stack. */
-	memcpy(&if_, parent_if, sizeof(struct intr_frame));
+	// 2. 자식 새끼의 rax에 0 저장 (정상적인 child 성공)
+	if_.R.rax = 0;
 
 	/* 2. Duplicate PT */
 	current->pml4 = pml4_create();
@@ -182,18 +236,40 @@ __do_fork(void *aux)
 		goto error;
 #endif
 
-	/* TODO: Your code goes here.
-	 * TODO: Hint) To duplicate the file object, use `file_duplicate`
-	 * TODO:       in include/filesys/file.h. Note that parent should not return
-	 * TODO:       from the fork() until this function successfully duplicates
-	 * TODO:       the resources of parent.*/
+	for (int fd = 2; fd < FDT_SIZE; fd++)
+	{
+		struct file *file_obj = parent->fd_table[fd];
+		if (file_obj != NULL)
+		{
+			// file_duplicate: 파일 객체를 복제하고 open count를 증가시킴
+			// (주의: 단순히 포인터만 복사하면 한쪽이 close할 때 문제 발생)
+			lock_acquire(&filesys_lock);
+			struct file *dup_file = file_duplicate(file_obj);
+			lock_release(&filesys_lock);
+			if (dup_file == NULL)
+				goto error;
 
-	process_init();
+			/* 자식의 FDT에 복제된 파일 할당 */
+			current->fd_table[fd] = dup_file;
+		}
+	}
+
+	// process_init();s
 
 	/* Finally, switch to the newly created process. */
 	if (succ)
+	{
+		// 자식새끼의 sema 반납으로 부모 깨우기
+		sema_up(&current->fork_sema);
+
+		// 자식새끼 유저모드로 변경
 		do_iret(&if_);
+	}
 error:
+	// 정상적으로 자식 못만들었을 시,
+	// 자식 상태 코드 , 부모 꺠우긴 해야함 , 자식새끼 종료
+	current->exit_status = TID_ERROR;
+	sema_up(&current->fork_sema);
 	thread_exit();
 }
 
@@ -247,13 +323,15 @@ int process_exec(void *f_name)
  *
  * This function will be implemented in problem 2-2.  For now, it
  * does nothing. */
-int process_wait(tid_t child_tid UNUSED)
+int process_wait(tid_t child_tid)
 {
-	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
-	 * XXX:       to add infinite loop here before
-	 * XXX:       implementing the process_wait. */
+	// 1. 자식 스레드 찾기
+	// 2. 자식이 종료될 때까지 busy waiting (또는 thread_yield)
+	// 3. 자식이 종료되면 저장해둔 exit_status 반환
+	// 4. 자식의 구조체(메모리) 해제
 	timer_sleep(1000);
-	return -1;
+	/* 실제 구현 시에는 sema_down(&child->wait_sema) 등을 사용해야 함 */
+	return -1; // 현재는 이렇게 되어 있어서 실패하는 것입니다.
 }
 
 /* Exit the process. This function is called by thread_exit (). */
