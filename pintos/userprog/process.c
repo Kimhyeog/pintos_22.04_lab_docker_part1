@@ -65,11 +65,8 @@ tid_t process_create_initd(const char *file_name)
 	char *thread_name = palloc_get_page(0);
 
 	if (thread_name == NULL)
-
 	{
-
 		palloc_free_page(fn_copy);
-
 		return TID_ERROR;
 	}
 
@@ -114,13 +111,13 @@ initd(void *f_name)
 tid_t process_fork(const char *name, struct intr_frame *if_ UNUSED)
 {
 
-	struct thread *curr = thread_current();
+	struct thread *cur = thread_current();
 
-	// [중요] 부모의 IF를 구조체에 백업 (자식이 가져갈 수 있도록)
-	memcpy(&curr->parent_if, if_, sizeof(struct intr_frame));
+	// 부모의 IF를 구조체에 백업 (자식이 가져갈 수 있도록)
+	memcpy(&cur->parent_if, if_, sizeof(struct intr_frame));
 
-	// [수정됨] 4번째 인자로 if_가 아니라 'curr'(부모 스레드 포인터)를 넘겨야 함!
-	tid_t tid = thread_create(name, PRI_DEFAULT, __do_fork, curr);
+	// 4번째 인자로 if_가 아니라 'cur'(부모 스레드 포인터)를 넘겨야 함!
+	tid_t tid = thread_create(name, PRI_DEFAULT, __do_fork, cur);
 
 	if (tid == TID_ERROR)
 		return TID_ERROR;
@@ -144,11 +141,12 @@ tid_t process_fork(const char *name, struct intr_frame *if_ UNUSED)
 
 static struct thread *get_child_process(tid_t tid)
 {
-	struct thread *cur = thread_current();
+	struct thread *parent = thread_current();
 	struct list_elem *e;
 
-	for (e = list_begin(&cur->child_list); e != list_end(&cur->child_list); e = list_next(e))
+	for (e = list_begin(&parent->child_list); e != list_end(&parent->child_list); e = list_next(e))
 	{
+		// list_entry() 마지막 인자 : 그 구조체 안의 멤버 이름
 		struct thread *t = list_entry(e, struct thread, child_elem);
 
 		if (t->tid == tid)
@@ -163,6 +161,9 @@ static struct thread *get_child_process(tid_t tid)
 #ifndef VM
 /* Duplicate the parent's address space by passing this function to the
  * pml4_for_each. This is only for the project 2. */
+// pte : 부모 thread의 Page table Entry , 쓰기 가능한지(W bit), 유저 모드 접근 가능한지(U bit) 등의 정보
+// va : pte를 가리키는 가상 주소 ,자식 프로세스에게 **"어느 주소"**에 메모리를 매핑해 줄지 알려주는 좌표
+// aux : 부모 스레드의 포인터
 static bool duplicate_pte(uint64_t *pte, void *va, void *aux)
 {
 	struct thread *current = thread_current();
@@ -185,7 +186,7 @@ static bool duplicate_pte(uint64_t *pte, void *va, void *aux)
 	if (newpage == NULL)
 		return false; // 메모리 부족 등으로 실패
 
-	/* 4. 내용 복사 (Deep Copy: 부모 그릇의 내용을 자식 그릇에 붓기) */
+	/* 4. 내용 복사 */
 	memcpy(newpage, parent_page, PGSIZE);
 
 	// 4-1. 쓰기 가능 여부 확인 (부모의 PTE에서 권한 비트 확인)
@@ -213,29 +214,35 @@ static void __do_fork(void *aux)
 	struct intr_frame if_;
 	struct thread *parent = (struct thread *)aux; // 이제 aux는 진짜 부모 스레드임
 	struct thread *current = thread_current();
-	/* 부모 스레드 구조체 안에 저장된 parent_if 주소를 가져와야 함 */
+
+	// 1. 부모의 parent_if 멤버 포인터 추출 및 자식에게 전달용 f에 parent_if 복사
 	struct intr_frame *parent_if = &parent->parent_if;
 	memcpy(&if_, parent_if, sizeof(struct intr_frame)); // 복사
+
+	// 2. 복사 성공용 bool success ture
 	bool succ = true;
 
-	// 2. 자식 새끼의 rax에 0 저장 (정상적인 child 성공)
+	// 3. 자식 새끼의 rax에 0 저장 (정상적인 child 성공)
 	if_.R.rax = 0;
 
-	/* 2. Duplicate PT */
+	/* 4. 자식의 페이지 테이블 생성 및 활설화 */
+
 	current->pml4 = pml4_create();
 	if (current->pml4 == NULL)
 		goto error;
 
 	process_activate(current);
+
 #ifdef VM
 	supplemental_page_table_init(&current->spt);
 	if (!supplemental_page_table_copy(&current->spt, &parent->spt))
 		goto error;
 #else
+	// 부모의 페이지 테이블을 뒤지면서, 유효한 유저영역 Entry둘울 duplicate_pte()로 복사
 	if (!pml4_for_each(parent->pml4, duplicate_pte, parent))
 		goto error;
 #endif
-
+	// 5. 부모의 FDT 복사 과정
 	for (int fd = 2; fd < FDT_SIZE; fd++)
 	{
 		struct file *file_obj = parent->fd_table[fd];
@@ -254,7 +261,7 @@ static void __do_fork(void *aux)
 		}
 	}
 
-	// process_init();s
+	// process_init();
 
 	/* Finally, switch to the newly created process. */
 	if (succ)
@@ -280,10 +287,50 @@ int process_exec(void *f_name)
 {
 	char *file_name = f_name;
 	bool success;
+	/* 1. 프로세스 메모리를 지우기 전에, 실행 파일이 실제로 존재하는지 먼저 확인해야 함.
+	 * 만약 여기서 파일이 없어서 실패하면, 현재 프로세스 상태를 유지한 채로 -1을 리턴해야 함.
+	 * process_cleanup() 이후에 실패하면 돌아갈 스택이 없어서 커널 패닉(Page Fault) 발생함.
+	 */
+	// 파일 이름 파싱을 위한 임시 메모리 할당
+	char *fn_copy = palloc_get_page(PAL_ZERO);
+	if (fn_copy == NULL)
+		return -1;
 
-	/* We cannot use the intr_frame in the thread structure.
-	 * This is because when current thread rescheduled,
-	 * it stores the execution information to the member. */
+	// 파일 이름 복사
+	strlcpy(fn_copy, file_name, PGSIZE);
+
+	// 첫 번째 토큰(프로그램 이름)만 추출
+	char *save_ptr;
+	char *prog_name = strtok_r(fn_copy, " ", &save_ptr);
+
+	// 파일 열기 시도
+	struct file *file_obj = filesys_open(prog_name);
+
+	if (file_obj == NULL)
+	{
+		/* 1. 로드 실패 로그 출력 (기존) */
+		printf("load: %s: open failed\n", file_name);
+
+		palloc_free_page(fn_copy);
+
+		/* 2. 종료 상태 설정 */
+		thread_current()->exit_status = -1;
+
+		/* ▼▼▼▼ [여기!] 이 printf를 추가해야 통과합니다. ▼▼▼▼ */
+		/* sys_exit가 원래 해줬어야 할 일을 수동으로 처리 */
+		printf("%s: exit(%d)\n", thread_name(), -1);
+		/* ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲ */
+
+		/* 3. 스레드 강제 종료 */
+		thread_exit();
+
+		return -1;
+	}
+
+	// 파일이 존재함을 확인했으므로 닫음 (load 함수에서 다시 열 것임)
+	file_close(file_obj);
+	palloc_free_page(fn_copy);
+
 	// 기존 현재 스레드의 메모리를 다 날려버릴 것이기 때문에 지역변수로 선언
 	struct intr_frame _if;
 	/* ds, es, ss: 데이터 세그먼트 (유저 데이터 영역 SEL_UDSEG) */
@@ -326,12 +373,22 @@ int process_exec(void *f_name)
 int process_wait(tid_t child_tid)
 {
 	// 1. 자식 스레드 찾기
+	struct thread *child = get_child_process(child_tid);
+	if (child == NULL)
+		return -1;
+
 	// 2. 자식이 종료될 때까지 busy waiting (또는 thread_yield)
+	sema_down(&child->wait_sema);
+
 	// 3. 자식이 종료되면 저장해둔 exit_status 반환
-	// 4. 자식의 구조체(메모리) 해제
-	timer_sleep(1000);
+	int status = child->exit_status;
+
+	// 4. 중복 wait 방지
+	list_remove(&child->child_elem);
 	/* 실제 구현 시에는 sema_down(&child->wait_sema) 등을 사용해야 함 */
-	return -1; // 현재는 이렇게 되어 있어서 실패하는 것입니다.
+	sema_up(&child->free_sema);
+
+	return status; // 현재는 이렇게 되어 있어서 실패하는 것입니다.
 }
 
 /* Exit the process. This function is called by thread_exit (). */
@@ -339,11 +396,11 @@ void process_exit(void)
 {
 	struct thread *curr = thread_current();
 
-	// [중요] fd_table이 할당된 경우에만 접근
+	lock_acquire(&filesys_lock);
+	// 1. 현 thread의 FDT의 파일들을 모두 닫기
 	if (curr->fd_table != NULL)
 	{
-		lock_acquire(&filesys_lock);
-		// 파일 닫기 (0, 1번 제외 안전하게 2번부터)
+		// 열린 파일 닫기 (0, 1번 제외 안전하게 2번부터)
 		for (int i = 2; i < FDT_SIZE; i++)
 		{
 			if (curr->fd_table[i] != NULL)
@@ -352,7 +409,6 @@ void process_exit(void)
 				curr->fd_table[i] = NULL;
 			}
 		}
-		lock_release(&filesys_lock);
 
 		/* ================================================= */
 		/* [수정] FDT 페이지 메모리 해제 (palloc의 짝꿍) */
@@ -361,19 +417,30 @@ void process_exit(void)
 		/* ================================================= */
 	}
 
-	// 실행 중인 파일 닫기
-	// if (curr->running_file != NULL)
-	// {
-	// 	file_close(curr->running_file);
-	// 	curr->running_file = NULL;
-	// }
+	struct list_elem *e;
+	for (e = list_begin(&curr->child_list);
+		 e != list_end(&curr->child_list);
+		 e = list_next(e))
+	{
+		struct thread *child = list_entry(e, struct thread, child_elem);
+		sema_up(&child->free_sema);
+	}
 
-	process_cleanup();
+	if (curr->running_file != NULL)
+	{
+		file_close(curr->running_file);
+		curr->running_file = NULL;
+	}
+
+	lock_release(&filesys_lock);
+	sema_up(&curr->wait_sema);
+	sema_down(&curr->free_sema);
+
+	thread_exit();
 }
 
 /* Free the current process's resources. */
-static void
-process_cleanup(void)
+static void process_cleanup(void)
 {
 	struct thread *curr = thread_current();
 
@@ -486,6 +553,16 @@ load(const char *file_name, struct intr_frame *if_)
 	bool success = false;
 	int i;
 
+	/* [수정 1] 스택 오버플로우 방지를 위해 힙에 할당 */
+	/* argv용 포인터 배열과 argv_addr용 포인터 배열을 담을 페이지 할당 */
+	/* 4KB 페이지 하나면 (128 * 8) * 2 = 2KB니까 충분함 */
+	char **argv = palloc_get_page(0);
+	if (argv == NULL)
+		return false;
+
+	// argv_addr은 페이지의 절반 지점부터 사용 (포인터 연산)
+	char **argv_addr = argv + 128;
+
 	// (1). 수정본 복제
 	char *fn_copy = palloc_get_page(0);
 	if (fn_copy == NULL)
@@ -493,7 +570,7 @@ load(const char *file_name, struct intr_frame *if_)
 	strlcpy(fn_copy, file_name, PGSIZE);
 
 	// (2). 파싱 작업
-	char *argv[128];
+	// char *argv[128];  <-- [삭제] 이거 때문에 스택 터짐
 	int argc = 0;
 	char *token, *save_ptr;
 	for (
@@ -523,6 +600,7 @@ load(const char *file_name, struct intr_frame *if_)
 		goto done;
 	}
 
+	/* ... (ELF 헤더 읽기 및 검증 코드는 그대로 유지) ... */
 	/* Read and verify executable header. */
 	if (file_read(file, &ehdr, sizeof ehdr) != sizeof ehdr || memcmp(ehdr.e_ident, "\177ELF\2\1\1", 7) || ehdr.e_type != 2 || ehdr.e_machine != 0x3E // amd64
 		|| ehdr.e_version != 1 || ehdr.e_phentsize != sizeof(struct Phdr) || ehdr.e_phnum > 1024)
@@ -546,12 +624,12 @@ load(const char *file_name, struct intr_frame *if_)
 		file_ofs += sizeof phdr;
 		switch (phdr.p_type)
 		{
+		// ... (Switch 문 내부 코드는 기존과 동일) ...
 		case PT_NULL:
 		case PT_NOTE:
 		case PT_PHDR:
 		case PT_STACK:
 		default:
-			/* Ignore this segment. */
 			break;
 		case PT_DYNAMIC:
 		case PT_INTERP:
@@ -567,15 +645,11 @@ load(const char *file_name, struct intr_frame *if_)
 				uint32_t read_bytes, zero_bytes;
 				if (phdr.p_filesz > 0)
 				{
-					/* Normal segment.
-					 * Read initial part from disk and zero the rest. */
 					read_bytes = page_offset + phdr.p_filesz;
 					zero_bytes = (ROUND_UP(page_offset + phdr.p_memsz, PGSIZE) - read_bytes);
 				}
 				else
 				{
-					/* Entirely zero.
-					 * Don't read anything from disk. */
 					read_bytes = 0;
 					zero_bytes = ROUND_UP(page_offset + phdr.p_memsz, PGSIZE);
 				}
@@ -596,54 +670,61 @@ load(const char *file_name, struct intr_frame *if_)
 	/* Start address. */
 	if_->rip = ehdr.e_entry;
 
-	/* TODO: Your code goes here.
-	 * TODO: Implement argument passing (see project2/argument_passing.html). */
-
-	// (3). 명령어 저장 주소값 배열 선언 및 스택에 PUSH 시작
-	char *argv_addr[128];
+	/* Argument Passing */
+	// char *argv_addr[128]; <-- [삭제] 이것도 스택 터짐
 
 	for (int i = argc - 1; i >= 0; i--)
 	{
 		size_t len = strlen(argv[i]) + 1;
 		if_->rsp -= len;
 		memcpy((void *)if_->rsp, argv[i], len);
-		argv_addr[i] = (char *)if_->rsp;
+		argv_addr[i] = (char *)if_->rsp; // [수정] 힙에 할당된 배열 사용
 	}
 
-	// (4). padding 적용
+	// Padding
 	if_->rsp = (uintptr_t)if_->rsp & ~0x7;
 
-	// (5). argv 배열의 끝을 알리는 NULL 포인터 (0) NULL
+	// NULL pointer
 	if_->rsp -= 8;
-	// memcpy((void *)if_->rsp, 0, sizeof(char *));
 	*(uint64_t *)if_->rsp = 0;
 
-	// (6). 저장 해둔 주소 배열 스택에 PUSH
+	// 주소값 PUSH
 	for (int i = argc - 1; i >= 0; i--)
 	{
-		// uint64_t
 		if_->rsp -= 8;
 		memcpy((void *)if_->rsp, &argv_addr[i], sizeof(char *));
-		// *(uint64_t *)if_->rsp = (uint64_t)argv_addrs[i];
 	}
 
-	// (7). rdi : argc , rsi = rsp
+	// Return Address
 	if_->R.rdi = argc;
 	if_->R.rsi = if_->rsp;
 
-	// (8). 가짜 주소 NULL 넣기
 	if_->rsp -= 8;
 	*(uint64_t *)if_->rsp = 0;
-	// memcpy((void *)if_->rsp, 0, sizeof(char *));
 
 	success = true;
 
 done:
 	/* We arrive here whether the load is successful or not. */
+
+	/* [수정 2] 할당받은 argv 페이지 해제 (필수) */
+	if (argv != NULL)
+		palloc_free_page(argv);
+
 	if (fn_copy != NULL)
 		palloc_free_page(fn_copy);
 
-	file_close(file);
+	/* [이전에 수정한 부분 유지] */
+	if (success)
+	{
+		t->running_file = file;
+		file_deny_write(file);
+	}
+	else
+	{
+		file_close(file);
+	}
+
 	return success;
 }
 

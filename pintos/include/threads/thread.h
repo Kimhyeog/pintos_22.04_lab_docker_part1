@@ -180,19 +180,21 @@ struct thread
 
 	// 3. 자식 프로세스 종료 대기 (wait)
 	struct semaphore wait_sema;
+	// [추가] 자식 메모리 해제 대기용 (부모가 허락해줄 때까지 대기)
+	struct semaphore free_sema;
 
 	// 4. 자식 프로세스 목록 관리
 	struct list child_list;
 	struct list_elem child_elem;
 
-	// 5. 파일 디스크립터 테이블 (FDT)
-	int fd_idx; // 다음 할당할 fd 인덱스 (선택사항)
-
-	// 6. 현재 실행 중인 파일 (rox: executable file writing 방지)
+	// 5. 현재 실행 중인 파일
+	// 프로세스가 실행되는 동안에는 해당 실행 파일에 대한 쓰기(Write)를 막기용
 	struct file *running_file;
 
-	// 7. 부모 프로세스의 인터럽트 프레임 (fork 시 사용)
+	// 6. 부모 프로세스의 인터럽트 프레임 (fork 시 사용)
 	struct intr_frame parent_if;
+
+	int fd_idx;
 };
 
 /* If false (default), use round-robin scheduler.

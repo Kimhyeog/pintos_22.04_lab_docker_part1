@@ -226,6 +226,9 @@ tid_t thread_create(const char *name, int priority, thread_func *function, void 
 	}
 	/* =========================================================== */
 
+	struct thread *parent = thread_current();
+	list_push_back(&parent->child_list, &t->child_elem);
+
 	/* Call the kernel_thread if it scheduled.
 	 * Note) rdi is 1st argument, and rsi is 2nd argument. */
 	t->tf.rip = (uintptr_t)kernel_thread;
@@ -722,14 +725,18 @@ init_thread(struct thread *t, const char *name, int priority)
 	t->original_priority = priority;
 	list_init(&t->donations);
 	t->waiting_on = NULL;
+
 	/* [수정] 그냥 NULL로 초기화만 하세요 */
 	t->fd_table = NULL;
 
 	/* [Project 2 추가 초기화] */
 	t->exit_status = 0; // 초기값 0
 
+	t->fd_idx = 0;
+
 	sema_init(&t->fork_sema, 0); // 0으로 초기화 (부모가 기다려야 하므로)
 	sema_init(&t->wait_sema, 0); // 0으로 초기화
+	sema_init(&t->free_sema, 0); // [추가] 0으로 초기화
 
 	list_init(&t->child_list); // 자식 리스트 초기화
 

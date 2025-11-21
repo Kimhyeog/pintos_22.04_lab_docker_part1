@@ -173,18 +173,22 @@ void syscall_handler(struct intr_frame *f UNUSED)
 		break;
 	}
 	case SYS_FORK:
-	{
-		const char *thread_name = (const char *)f->R.rdi;
-		f->R.rax = sys_fork(thread_name, f);
+		const char *user_name_ptr = (const char *)f->R.rdi;
+
+		// 1. 주소 유효성 검사 (필수)
+		check_address(user_name_ptr);
+
+		// 2. 복사된 커널 포인터를 넘김
+		f->R.rax = sys_fork(user_name_ptr, f);
+
 		break;
-	}
 	case SYS_WAIT:
 	{
 		// 1. User Program이 기다리고 싶어하는 자식 PID를 rdi 레지스터로 전달받기
 		tid_t pid = f->R.rdi;
 
 		// 2. process_wait() 수행 후, 결과를 status 받기
-		int status = process_wait(pid);
+		f->R.rax = process_wait(pid);
 		break;
 	}
 	case SYS_CREATE:
@@ -246,7 +250,7 @@ void sys_exit(int status)
 	struct thread *cur = thread_current();
 
 	// [추가 권장] 나중에 process_wait 구현을 위해 필요합니다.
-	// cur->exit_status = status;
+	cur->exit_status = status;
 
 	printf("%s: exit(%d)\n", cur->name, status);
 
@@ -293,7 +297,7 @@ int sys_write(int fd, const void *buffer, unsigned size)
 int sys_exec(const char *cmd_line)
 {
 	// 1. 들어온 명령어 메모리 주소 유효성 검사
-	check_address(cmd_line);
+	check_string(cmd_line);
 
 	// 2. 명렁어 복사
 	/*
@@ -389,7 +393,7 @@ void sys_close(int fd)
 {
 	// 1. 해당 close할 파일이 fd 범위 외라면, 종료
 	if (fd < 2 || fd >= FDT_SIZE)
-		sys_exit(-1);
+		return;
 
 	// 2. 현재 thread의 FDT에서 fd에 해당되는 파일 추출
 	struct thread *cur = thread_current();
@@ -397,7 +401,7 @@ void sys_close(int fd)
 
 	// 3. NULL file일 경우 종료
 	if (file_obj == NULL)
-		sys_exit(-1);
+		return;
 
 	// 4. close 과정 시작
 	lock_acquire(&filesys_lock);
