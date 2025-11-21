@@ -5,6 +5,7 @@
 #include <list.h>
 #include <stdint.h>
 #include "threads/interrupt.h"
+#include "synch.h"
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -115,6 +116,13 @@ struct thread
 
 	struct file **fd_table;
 
+	// wait
+	struct child_info *child_info; 
+	struct list child_list; 
+
+	//row
+	struct file *hold_file;
+
 #ifdef USERPROG
 	/* Owned by userprog/process.c. */
 	uint64_t *pml4; /* Page map level 4 */
@@ -127,6 +135,13 @@ struct thread
 	/* Owned by thread.c. */
 	struct intr_frame tf; /* Information for switching */
 	unsigned magic;		  /* Detects stack overflow. */
+};
+
+struct child_info {
+	struct semaphore sema;
+	int exit_status;
+	tid_t tid;
+	struct list_elem elem;
 };
 
 /* If false (default), use round-robin scheduler.

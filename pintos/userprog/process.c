@@ -19,6 +19,8 @@
 #include "threads/vaddr.h"
 #include "intrinsic.h"
 #include "threads/synch.h"
+#include "threads/malloc.h"
+#include "list.h"
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -28,7 +30,12 @@ static bool load (const char *file_name, struct intr_frame *if_);
 static void initd (void *f_name);
 static void __do_fork (void *);
 
-static struct semaphore fork_sema;
+struct do_fork_aux {
+    struct thread *parent;
+    struct intr_frame *tf; // 부모의 유저 모드 레지스터 정보 (포인터)
+	struct semaphore *sema;
+	bool *succ;
+};
 
 /* General process initializer for initd and other process. */
 static void
@@ -97,17 +104,36 @@ initd (void *f_name) {
  * TID_ERROR if the thread cannot be created. */
 tid_t
 process_fork (const char *name, struct intr_frame *if_) {
-	/* Clone current thread to new thread.*/
-	
-	struct thread *curr = thread_current();
-	memcpy(&curr->tf, if_, sizeof(struct intr_frame));
+    struct thread *curr = thread_current();
+	struct semaphore fork_sema;
+	bool succ = false;
+
+    struct do_fork_aux *aux = malloc(sizeof(struct do_fork_aux));
+    if (aux == NULL) return TID_ERROR;
 
 	sema_init(&fork_sema, 0);
-	
-	tid_t result = thread_create (name, PRI_DEFAULT, __do_fork, curr);
-	sema_down(&fork_sema);
 
-	return result;
+    aux->parent = curr;
+    aux->tf = if_; 
+	aux->sema = &fork_sema;
+	aux->succ = &succ;
+    
+    tid_t result = thread_create (name, PRI_DEFAULT, __do_fork, aux);
+    
+    if (result == TID_ERROR) {
+        free(aux); 
+        return TID_ERROR;
+    }
+
+    sema_down(&fork_sema);
+
+
+
+	if (!succ) {
+        return TID_ERROR; 
+    }
+
+    return result;
 }
 
 #ifndef VM
@@ -149,7 +175,7 @@ duplicate_pte (uint64_t *pte, void *va, void *aux) {
 	 *    permission. */
 	if (!pml4_set_page (current->pml4, va, newpage, writable)) {
 		/* 6. TODO: if fail to insert page, do error handling. */
-		palloc_free_page(newpage); // 할당 받은거 다시 돌려주고
+		palloc_free_page(newpage); 
 		return false;
 	}
 	return true;
@@ -163,18 +189,18 @@ duplicate_pte (uint64_t *pte, void *va, void *aux) {
 static void
 __do_fork (void *aux) {
 	struct intr_frame if_;
-	struct thread *parent = (struct thread *) aux;
-	struct thread *current = thread_current ();
+    struct do_fork_aux *fork_aux = (struct do_fork_aux *) aux;
+    struct thread *parent = fork_aux->parent;
+    struct intr_frame *parent_if = fork_aux->tf; 
+	struct semaphore *fork_sema = fork_aux->sema;
+	bool *succ_ptr = fork_aux->succ; // [추가] 주소 꺼내기
 
-	/* TODO: somehow pass the parent_if. (i.e. process_fork()'s if_) */
-	struct intr_frame *parent_if = &parent->tf;  // 인터럽트 프레임 넘겨준다.
-	bool succ = true;
+    struct thread *current = thread_current ();
+    bool succ = true;
 
-	/* 1. Read the cpu context to local stack. */
-	memcpy (&if_, parent_if, sizeof (struct intr_frame));
-
-	// 자식 스레드의 반환값 레지스터 0으로 설정.
-	if_.R.rax = 0;
+    /* 1. Read the cpu context to local stack. */
+    memcpy (&if_, parent_if, sizeof (struct intr_frame));
+    if_.R.rax = 0; // 자식 리턴값 0 설정
 
 	/* 2. Duplicate PT */
 	current->pml4 = pml4_create();
@@ -212,11 +238,16 @@ __do_fork (void *aux) {
 
 	/* Finally, switch to the newly created process. */
 	if (succ) {
-		sema_up(&fork_sema);
-		// printf("%d", if_.R.rax);
+		*succ_ptr = true; // [추가] 부모의 변수에 "성공했음" 표시 (True)
+		sema_up(fork_sema);
+   		free(fork_aux);
 		do_iret (&if_);
 	}
 error:
+	// current->exit_status = TID_ERROR;
+
+	sema_up(fork_sema);
+   	free(fork_aux);
 	thread_exit ();
 }
 
@@ -234,14 +265,17 @@ int process_exec (void *f_name) {
 	_if.cs = SEL_UCSEG;
 	_if.eflags = FLAG_IF | FLAG_MBS;
 
+	char *copy_file_name = palloc_get_page(PAL_ZERO);
+	strlcpy(copy_file_name, file_name, PGSIZE);
 	/* We first kill the current context */
 	process_cleanup ();
 
 	/* And then load the binary */
-	success = load (file_name, &_if);
+	success = load (copy_file_name, &_if);
 
 	/* If load failed, quit. */
-	palloc_free_page (file_name);
+	palloc_free_page (copy_file_name); 
+
 	if (!success)
 		return -1;
 
@@ -261,26 +295,38 @@ int process_exec (void *f_name) {
  * This function will be implemented in problem 2-2.  For now, it
  * does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) {
-	/* XXX: Hint) The pintos exit if process_wait (initd), we recommend you
-	 * XXX:       to add infinite loop here before
-	 * XXX:       implementing the process_wait. */
-	 
-	timer_sleep(100);
+process_wait (tid_t child_tid) {
+
+	struct thread *current = thread_current();
+	struct list *child_list = &current->child_list;
+	struct list_elem *e;
+	int exit_status;
+
+	// child_list를 돌면서 child_info의 tid가 같은게 있는지 찾는다.
+	for (e = list_begin(child_list); e != list_end(child_list); e = list_next(e)) {
+		struct child_info *info = list_entry(e, struct child_info, elem);
+		
+		if (info->tid == child_tid) {
+			sema_down(&info->sema);
+			exit_status = info->exit_status;
+			list_remove(e);
+			free(info);
+			return exit_status;
+		}
+	}
+
 	return -1;
-}
+}	
 
 /* Exit the process. This function is called by thread_exit (). */
 void
 process_exit (void) {
 	struct thread *curr = thread_current ();
-	/* TODO: Your code goes here.
-	 * TODO: Implement process termination message (see
-	 * TODO: project2/process_termination.html).
-	 * TODO: We recommend you to implement process resource cleanup here. */
 
-	// 1. 열린 파일들 닫기 (기존 코드 유지)
-    // 주의: fd_table이 NULL일 수도 있으니 체크 먼저!
+	if (curr->hold_file != NULL) {
+		file_allow_write(curr->hold_file);
+	}
+
     if (curr->fd_table != NULL) {
         for (int i = 0; i < 128; i++) {
             if (curr->fd_table[i] != NULL) {
@@ -289,18 +335,25 @@ process_exit (void) {
             }
         }
         
-        // [추가] 테이블 자체를 메모리 해제
         palloc_free_page(curr->fd_table);
-        curr->fd_table = NULL; // 댕글링 포인터 방지
+        curr->fd_table = NULL; 
     }
 
-	// if (current->fd_table != NULL) {
-	// 	palloc_free_page(current->fd_table);
-	// 	current->fd_table = NULL;
-	// }
+    struct list_elem *e = list_begin(&curr->child_list);
+    while (e != list_end(&curr->child_list)) {
+        struct child_info *info = list_entry(e, struct child_info, elem);
+        e = list_remove(e); 
+        free(info);        
+    }
 
-	//args-none: exit(0)
-	printf("%s: exit(%d)\n", curr->name, curr->exit_status);
+	if (curr->pml4 != NULL) {
+        printf("%s: exit(%d)\n", curr->name, curr->exit_status);
+    }
+
+    if (curr->child_info != NULL) {
+        curr->child_info->exit_status = curr->exit_status; 
+        sema_up(&curr->child_info->sema);
+    }
 	process_cleanup ();
 }
 
@@ -413,8 +466,6 @@ static bool load (const char *cmd_line, struct intr_frame *if_) {
 	bool success = false;
 	int i;
 	
-
-
 	// ============================================================================================================
 
 	char *file_name;
@@ -423,6 +474,7 @@ static bool load (const char *cmd_line, struct intr_frame *if_) {
 	int count = 0;
 	char *save_ptr;
 
+	
 	// 스택 포인터 배열
 	char *address[64];
 
@@ -439,9 +491,6 @@ static bool load (const char *cmd_line, struct intr_frame *if_) {
 		goto done;
 	}
 
-
-
-	
 	// ============================================================================================================
 
 	/* Allocate and activate page directory. */
@@ -456,6 +505,11 @@ static bool load (const char *cmd_line, struct intr_frame *if_) {
 		printf ("load: %s: open failed\n", file_name);
 		goto done;
 	}
+
+	//rox
+	file_deny_write(file);
+
+	
 
 	/* Read and verify executable header. */
 	if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -547,7 +601,6 @@ static bool load (const char *cmd_line, struct intr_frame *if_) {
 	//8바이트 정렬하기
 	if_->rsp = if_->rsp & ~0x7;
 
-
 	// 스택에 배열 넣기 // 작은 주소부터 큰 주소로 쓰인다.
 	for (int i = count; i >= 0; i--) {
 		if_->rsp -= sizeof(address[i]);
@@ -555,7 +608,7 @@ static bool load (const char *cmd_line, struct intr_frame *if_) {
 		*((char **)(if_->rsp)) = address[i];  // 이중 포인터 꼭 써야함.
 	}
 
-		// 레지스터 설정하기
+	// 레지스터 설정하기
 	if_->R.rdi = count;
 	if_->R.rsi = if_->rsp;
 
@@ -568,12 +621,17 @@ static bool load (const char *cmd_line, struct intr_frame *if_) {
 
 
 done:
-
 	if (copy_cmd_line != NULL) {
 		palloc_free_page(copy_cmd_line);
 	}
+
 	/* We arrive here whether the load is successful or not. */
-	file_close (file);
+	if (success) {
+		t->hold_file = file;
+	} else {
+		file_close (file);
+	}
+
 	return success;
 }
 
