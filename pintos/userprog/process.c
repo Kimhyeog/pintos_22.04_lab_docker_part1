@@ -106,20 +106,19 @@ process_fork (const char *name, struct intr_frame *if_) {
     struct thread *curr = thread_current();
 	struct semaphore fork_sema;
 
-    /* [추가] 보조 구조체 생성 및 값 채우기 */
     struct do_fork_aux *aux = malloc(sizeof(struct do_fork_aux));
     if (aux == NULL) return TID_ERROR;
 
 	sema_init(&fork_sema, 0);
 
     aux->parent = curr;
-    aux->tf = if_; // 스택에 있는 if_ 주소를 그대로 전달 (부모가 wait하므로 안전함)
+    aux->tf = if_; 
 	aux->sema = &fork_sema;
     
     tid_t result = thread_create (name, PRI_DEFAULT, __do_fork, aux);
     
     if (result == TID_ERROR) {
-        free(aux); // 실패 시 해제
+        free(aux); 
         return TID_ERROR;
     }
 
@@ -171,7 +170,7 @@ duplicate_pte (uint64_t *pte, void *va, void *aux) {
 	 *    permission. */
 	if (!pml4_set_page (current->pml4, va, newpage, writable)) {
 		/* 6. TODO: if fail to insert page, do error handling. */
-		palloc_free_page(newpage); // 할당 받은거 다시 돌려주고
+		palloc_free_page(newpage); 
 		return false;
 	}
 	return true;
@@ -196,8 +195,6 @@ __do_fork (void *aux) {
     /* 1. Read the cpu context to local stack. */
     memcpy (&if_, parent_if, sizeof (struct intr_frame));
     if_.R.rax = 0; // 자식 리턴값 0 설정
-
-
 
 	/* 2. Duplicate PT */
 	current->pml4 = pml4_create();
@@ -240,6 +237,8 @@ __do_fork (void *aux) {
 		do_iret (&if_);
 	}
 error:
+	current->exit_status = TID_ERROR;
+
 	sema_up(fork_sema);
    	free(fork_aux);
 	thread_exit ();
@@ -259,14 +258,17 @@ int process_exec (void *f_name) {
 	_if.cs = SEL_UCSEG;
 	_if.eflags = FLAG_IF | FLAG_MBS;
 
+	char *copy_file_name = palloc_get_page(PAL_ZERO);
+	strlcpy(copy_file_name, file_name, PGSIZE);
 	/* We first kill the current context */
 	process_cleanup ();
 
 	/* And then load the binary */
-	success = load (file_name, &_if);
+	success = load (copy_file_name, &_if);
 
 	/* If load failed, quit. */
-	palloc_free_page (file_name);
+	palloc_free_page (copy_file_name); 
+
 	if (!success)
 		return -1;
 
@@ -313,13 +315,11 @@ process_wait (tid_t child_tid) {
 void
 process_exit (void) {
 	struct thread *curr = thread_current ();
-	/* TODO: Your code goes here.
-	 * TODO: Implement process termination message (see
-	 * TODO: project2/process_termination.html).
-	 * TODO: We recommend you to implement process resource cleanup here. */
 
-	// 1. 열린 파일들 닫기 (기존 코드 유지)
-    // 주의: fd_table이 NULL일 수도 있으니 체크 먼저!
+	if (curr->hold_file != NULL) {
+		file_allow_write(curr->hold_file);
+	}
+
     if (curr->fd_table != NULL) {
         for (int i = 0; i < 128; i++) {
             if (curr->fd_table[i] != NULL) {
@@ -328,32 +328,22 @@ process_exit (void) {
             }
         }
         
-        // [추가] 테이블 자체를 메모리 해제
         palloc_free_page(curr->fd_table);
-        curr->fd_table = NULL; // 댕글링 포인터 방지
+        curr->fd_table = NULL; 
     }
 
-	// if (current->fd_table != NULL) {
-	// 	palloc_free_page(current->fd_table);
-	// 	current->fd_table = NULL;
-	// }
-
-    /* 3. [추가] 부모로서 자식 리스트 정리 (메모리 누수 방지) */
-    // 내가 죽으니까, 내가 관리하던 자식 우체통들을 다 폐기합니다.
     struct list_elem *e = list_begin(&curr->child_list);
     while (e != list_end(&curr->child_list)) {
         struct child_info *info = list_entry(e, struct child_info, elem);
-        e = list_remove(e); // 리스트에서 빼고
-        free(info);         // 메모리 해제 (malloc.h 필요)
+        e = list_remove(e); 
+        free(info);        
     }
 
-	//args-none: exit(0)
-	printf("%s: exit(%d)\n", curr->name, curr->exit_status);
+	if (curr->pml4 != NULL) {
+        printf("%s: exit(%d)\n", curr->name, curr->exit_status);
+    }
 
-	/* 2. [수정] 부모에게 종료 상태 전달 */
-    // 반드시 NULL 체크를 해야 합니다 (초기 프로세스 initd는 부모가 없을 수 있음)
     if (curr->child_info != NULL) {
-        // syscall_handler에서 설정한 값을 그대로 옮겨 적어야 합니다.
         curr->child_info->exit_status = curr->exit_status; 
         sema_up(&curr->child_info->sema);
     }
@@ -477,6 +467,7 @@ static bool load (const char *cmd_line, struct intr_frame *if_) {
 	int count = 0;
 	char *save_ptr;
 
+	
 	// 스택 포인터 배열
 	char *address[64];
 
@@ -507,6 +498,11 @@ static bool load (const char *cmd_line, struct intr_frame *if_) {
 		printf ("load: %s: open failed\n", file_name);
 		goto done;
 	}
+
+	//rox
+	file_deny_write(file);
+
+	
 
 	/* Read and verify executable header. */
 	if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -618,13 +614,17 @@ static bool load (const char *cmd_line, struct intr_frame *if_) {
 
 
 done:
-
 	if (copy_cmd_line != NULL) {
 		palloc_free_page(copy_cmd_line);
 	}
-	
+
 	/* We arrive here whether the load is successful or not. */
-	file_close (file);
+	if (success) {
+		t->hold_file = file;
+	} else {
+		file_close (file);
+	}
+
 	return success;
 }
 

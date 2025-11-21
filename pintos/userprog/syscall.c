@@ -65,7 +65,7 @@ void syscall_handler (struct intr_frame *f UNUSED) {
 	switch (status) {
 		case SYS_WRITE: {
 			int fd = f->R.rdi;
-			check_valid_string((char *)f->R.rsi);
+			check_valid_address((char *)f->R.rsi);
 			if (fd < 0 || fd >= 128) {
 				thread_current()->exit_status = -1;
 				thread_exit();
@@ -90,6 +90,7 @@ void syscall_handler (struct intr_frame *f UNUSED) {
 
 		case SYS_EXEC:
 			char *cmd_line = f->R.rdi;
+			check_valid_string(cmd_line);
 			if (cmd_line == NULL) {
 				thread_current()->exit_status = -1;
 				thread_exit();
@@ -180,6 +181,17 @@ void syscall_handler (struct intr_frame *f UNUSED) {
 		case SYS_WAIT: {
 			f->R.rax = process_wait(f->R.rdi);
 			break;
+		}
+
+		case SYS_SEEK: {
+			struct thread *curr = thread_current();
+			int fd= f->R.rdi;
+			off_t pos = f->R.rsi;
+
+			struct file *file = curr->fd_table[fd];		
+			if (file != NULL) {
+				file_seek(file, pos);
+			}	
 		}
 		
 		default:
