@@ -43,7 +43,6 @@ static void process_init(void)
  * thread id, or TID_ERROR if the thread cannot be created.
  * Notice that THIS SHOULD BE CALLED ONCE. */
 tid_t process_create_initd(const char *file_name)
-
 {
 
 	char *fn_copy;
@@ -287,49 +286,53 @@ int process_exec(void *f_name)
 {
 	char *file_name = f_name;
 	bool success;
-	/* 1. 프로세스 메모리를 지우기 전에, 실행 파일이 실제로 존재하는지 먼저 확인해야 함.
-	 * 만약 여기서 파일이 없어서 실패하면, 현재 프로세스 상태를 유지한 채로 -1을 리턴해야 함.
-	 * process_cleanup() 이후에 실패하면 돌아갈 스택이 없어서 커널 패닉(Page Fault) 발생함.
-	 */
-	// 파일 이름 파싱을 위한 임시 메모리 할당
+
+	// 1. 파일 이름만 파싱 작업
 	char *fn_copy = palloc_get_page(PAL_ZERO);
 	if (fn_copy == NULL)
 		return -1;
 
-	// 파일 이름 복사
 	strlcpy(fn_copy, file_name, PGSIZE);
 
-	// 첫 번째 토큰(프로그램 이름)만 추출
 	char *save_ptr;
 	char *prog_name = strtok_r(fn_copy, " ", &save_ptr);
 
-	// 파일 열기 시도
+	// 2. 파싱한 파일명으로 파일 열기
+	lock_acquire(&filesys_lock);
 	struct file *file_obj = filesys_open(prog_name);
+	lock_release(&filesys_lock);
 
+	// 3-1. 해당 파일이 없을 시,
 	if (file_obj == NULL)
 	{
-		/* 1. 로드 실패 로그 출력 (기존) */
 		printf("load: %s: open failed\n", file_name);
-
+		// 복사해놨던 파일 이름 free
 		palloc_free_page(fn_copy);
+		// 명령어도 free
+		palloc_free_page(f_name);
 
-		/* 2. 종료 상태 설정 */
+		// // 현재 thread 종료 상태 오류로 변경
+		// thread_current()->status = -1;
 		thread_current()->exit_status = -1;
 
-		/* ▼▼▼▼ [여기!] 이 printf를 추가해야 통과합니다. ▼▼▼▼ */
-		/* sys_exit가 원래 해줬어야 할 일을 수동으로 처리 */
-		printf("%s: exit(%d)\n", thread_name(), -1);
-		/* ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲ */
-
-		/* 3. 스레드 강제 종료 */
+		// // thread 종료
 		thread_exit();
 
 		return -1;
 	}
 
-	// 파일이 존재함을 확인했으므로 닫음 (load 함수에서 다시 열 것임)
+	// 3-2. 해당 파일이 있을 시,
+	// 파일 있는거 확인 했으므로, 닫기
+	lock_acquire(&filesys_lock);
 	file_close(file_obj);
+	lock_release(&filesys_lock);
+
+	// 복사해 놨던 fn_copy page 해제
 	palloc_free_page(fn_copy);
+
+	// 4. 현재 thread의 청소
+	// Intr_frame 청소
+	// process 청소
 
 	// 기존 현재 스레드의 메모리를 다 날려버릴 것이기 때문에 지역변수로 선언
 	struct intr_frame _if;
@@ -344,15 +347,20 @@ int process_exec(void *f_name)
 	/*현재 프로세스의 페이지 테이블(pml4)을 지우기 */
 	process_cleanup();
 
+	// 5. 해당 파일로 실행 loac함수 호출
 	/* And then load the binary */
 	/*file_name 실행 파일을 읽어 메모리에 올린다.*/
 	success = load(file_name, &_if);
 
 	/* If load failed, quit. */
 	/*새 프로그램의 시작점 정보가 담깁 , 실패시 오류 처리*/
-	palloc_free_page(file_name);
 	if (!success)
-		return -1;
+	{
+		palloc_free_page(file_name);
+		thread_current()->exit_status = -1; // (O) 실패 흔적 남기고
+		thread_exit();
+	}
+	palloc_free_page(file_name);
 
 	/* Start switched process. */
 	/* Context Switching*/
@@ -370,73 +378,83 @@ int process_exec(void *f_name)
  *
  * This function will be implemented in problem 2-2.  For now, it
  * does nothing. */
-int process_wait(tid_t child_tid)
+
+// 현제 호출중인 thread는 부모 thread
+int process_wait(tid_t tid)
 {
-	// 1. 자식 스레드 찾기
-	struct thread *child = get_child_process(child_tid);
+	// 1. 현재 thread(부모) wait을 요청할 자식 tid로 자식 thread 찾기
+	struct thread *child = get_child_process(tid);
 	if (child == NULL)
 		return -1;
 
-	// 2. 자식이 종료될 때까지 busy waiting (또는 thread_yield)
+	// 2. 부모 thread를 재우기 == wait_sema 챙기기 -> 그떄동안 child thread를 종료 시키기
 	sema_down(&child->wait_sema);
 
-	// 3. 자식이 종료되면 저장해둔 exit_status 반환
+	// 3. 자식 thread의 exit_status를 뽑기
 	int status = child->exit_status;
 
-	// 4. 중복 wait 방지
+	// 4. 해당 child를 현재 thread의 자식 리스트에서 제거
 	list_remove(&child->child_elem);
-	/* 실제 구현 시에는 sema_down(&child->wait_sema) 등을 사용해야 함 */
+
+	// 5. 해당 부모 thread의 fork_sema 반납 : child의 유언 듣기 전까지는 죽지 않도록 하기
+	// 부모가 sema_up(&free_sema)를 하여, 1이 증가되고, 그떄 지혼자 감옥으로 간
+	// 자식이 wait_;ist에서 나와 뒤짐
 	sema_up(&child->free_sema);
 
-	return status; // 현재는 이렇게 되어 있어서 실패하는 것입니다.
+	return status;
 }
 
 /* Exit the process. This function is called by thread_exit (). */
 void process_exit(void)
 {
-	struct thread *curr = thread_current();
+	struct thread *cur = thread_current();
 
 	lock_acquire(&filesys_lock);
-	// 1. 현 thread의 FDT의 파일들을 모두 닫기
-	if (curr->fd_table != NULL)
-	{
-		// 열린 파일 닫기 (0, 1번 제외 안전하게 2번부터)
-		for (int i = 2; i < FDT_SIZE; i++)
-		{
-			if (curr->fd_table[i] != NULL)
-			{
-				file_close(curr->fd_table[i]);
-				curr->fd_table[i] = NULL;
-			}
-		}
 
-		/* ================================================= */
-		/* [수정] FDT 페이지 메모리 해제 (palloc의 짝꿍) */
-		palloc_free_page(curr->fd_table);
-		curr->fd_table = NULL;
-		/* ================================================= */
+	if (cur->pml4 != NULL)
+	{
+		printf("%s: exit(%d)\n", cur->name, cur->exit_status);
+	}
+
+	if (cur->fd_table != NULL)
+	{
+		for (int fd = 0; fd < FDT_SIZE; fd++)
+			if (cur->fd_table[fd] != NULL)
+			{
+				file_close(cur->fd_table[fd]);
+				cur->fd_table[fd] = NULL;
+			}
+
+		palloc_free_page(cur->fd_table);
+		cur->fd_table = NULL;
 	}
 
 	struct list_elem *e;
-	for (e = list_begin(&curr->child_list);
-		 e != list_end(&curr->child_list);
-		 e = list_next(e))
+
+	for (
+		e = list_begin(&cur->child_list);
+		e != list_end(&cur->child_list);
+		e = list_next(e))
 	{
 		struct thread *child = list_entry(e, struct thread, child_elem);
 		sema_up(&child->free_sema);
 	}
 
-	if (curr->running_file != NULL)
+	// running file 닫기
+	if (cur->running_file != NULL)
 	{
-		file_close(curr->running_file);
-		curr->running_file = NULL;
+		file_close(cur->running_file);
+		cur->running_file = NULL;
 	}
 
 	lock_release(&filesys_lock);
-	sema_up(&curr->wait_sema);
-	sema_down(&curr->free_sema);
 
-	thread_exit();
+	process_cleanup();
+
+	sema_up(&cur->wait_sema);
+	sema_down(&cur->free_sema);
+
+	// thread_exit();
 }
 
 /* Free the current process's resources. */
@@ -593,6 +611,7 @@ load(const char *file_name, struct intr_frame *if_)
 	process_activate(thread_current());
 
 	/* Open executable file. */
+	lock_acquire(&filesys_lock);
 	file = filesys_open(argv[0]);
 	if (file == NULL)
 	{
@@ -707,7 +726,6 @@ load(const char *file_name, struct intr_frame *if_)
 done:
 	/* We arrive here whether the load is successful or not. */
 
-	/* [수정 2] 할당받은 argv 페이지 해제 (필수) */
 	if (argv != NULL)
 		palloc_free_page(argv);
 
@@ -724,6 +742,7 @@ done:
 	{
 		file_close(file);
 	}
+	lock_release(&filesys_lock);
 
 	return success;
 }

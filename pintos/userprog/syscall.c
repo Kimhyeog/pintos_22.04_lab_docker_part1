@@ -277,8 +277,6 @@ void sys_exit(int status)
 	// [추가 권장] 나중에 process_wait 구현을 위해 필요합니다.
 	cur->exit_status = status;
 
-	printf("%s: exit(%d)\n", cur->name, status);
-
 	thread_exit();
 }
 
@@ -331,7 +329,10 @@ int sys_exec(const char *cmd_line)
 	strlcpy(cmd_line_copy, cmd_line, PGSIZE);
 
 	if (process_exec(cmd_line_copy) == -1)
+	{
+		palloc_free_page(cmd_line_copy);
 		return -1;
+	}
 
 	NOT_REACHED();
 
@@ -465,16 +466,19 @@ int sys_read(int fd, void *buffer, unsigned size)
 	else if (fd >= 2 && fd < FDT_SIZE)
 	{
 		int byte_read_size = -1;
+		lock_acquire(&filesys_lock);
 		struct thread *cur = thread_current();
 		struct file *file_obj = cur->fd_table[fd];
 
 		if (file_obj == NULL)
+		{
+			lock_release(&filesys_lock);
 			return -1;
+		}
 
-		lock_acquire(&filesys_lock);
 		byte_read_size = file_read(file_obj, buffer, size);
-		lock_release(&filesys_lock);
 
+		lock_release(&filesys_lock);
 		return byte_read_size;
 	}
 
