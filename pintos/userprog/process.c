@@ -230,7 +230,7 @@ __do_fork (void *aux) {
         goto error;
     }
 
-	 for (int i = 2; i < 128; i++) {
+	 for (int i = 2; i < 512; i++) {
 		if (parent->fd_table[i]	!= NULL) {
 			current->fd_table[i] = file_duplicate(parent->fd_table[i]);
 		}
@@ -328,7 +328,7 @@ process_exit (void) {
 	}
 
     if (curr->fd_table != NULL) {
-        for (int i = 0; i < 128; i++) {
+        for (int i = 0; i < 512; i++) {
             if (curr->fd_table[i] != NULL) {
                 file_close(curr->fd_table[i]);
                 curr->fd_table[i] = NULL;
