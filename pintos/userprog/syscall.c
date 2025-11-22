@@ -61,6 +61,10 @@ int sys_filesize(int fd);
 
 tid_t sys_fork(const char *thread_name, struct intr_frame *f);
 
+void sys_seek(int fd, unsigned position);
+
+int sys_tell(int fd);
+
 /////////////////////////////////////////////////////////////////////
 
 // 유저가 제공한 포인터(주소)가 유효한지 검사
@@ -173,6 +177,7 @@ void syscall_handler(struct intr_frame *f UNUSED)
 		break;
 	}
 	case SYS_FORK:
+	{
 		const char *user_name_ptr = (const char *)f->R.rdi;
 
 		// 1. 주소 유효성 검사 (필수)
@@ -182,6 +187,7 @@ void syscall_handler(struct intr_frame *f UNUSED)
 		f->R.rax = sys_fork(user_name_ptr, f);
 
 		break;
+	}
 	case SYS_WAIT:
 	{
 		// 1. User Program이 기다리고 싶어하는 자식 PID를 rdi 레지스터로 전달받기
@@ -223,6 +229,22 @@ void syscall_handler(struct intr_frame *f UNUSED)
 		sys_close(fd);
 		break;
 	}
+	case SYS_SEEK:
+	{
+		int fd = f->R.rdi;
+		unsigned position = f->R.rsi;
+
+		sys_seek(fd, position);
+		break;
+	}
+	case SYS_TELL:
+	{
+		int fd = f->R.rdi;
+
+		f->R.rax = sys_tell(fd);
+
+		break;
+	}
 	case SYS_EXIT:
 	{
 		// 1. rdi 레지스터에 담겨있는 thread의 상태를 꺼낸다.
@@ -232,11 +254,14 @@ void syscall_handler(struct intr_frame *f UNUSED)
 		break;
 	}
 	default:
+	{
+
 		// 유효하지 않은 시스템 콜 번호가 들어온 경우
 		printf("Unknown system call: %llu\n", syscall_num);
 		// 프로세스를 에러 상태(-1)로 강제 종료시킵니다.
 		sys_exit(-1);
 		break;
+	}
 	}
 }
 
@@ -296,23 +321,15 @@ int sys_write(int fd, const void *buffer, unsigned size)
 
 int sys_exec(const char *cmd_line)
 {
-	// 1. 들어온 명령어 메모리 주소 유효성 검사
-	check_string(cmd_line);
 
-	// 2. 명렁어 복사
-	/*
-	참고 : PAL ZERO
-	- PAL : Page Allocator
-	- ZERO : 0으로 채운다는 뜻
-	*/
+	check_address(cmd_line);
+
 	char *cmd_line_copy = palloc_get_page(PAL_ZERO);
 	if (cmd_line_copy == NULL)
 		return -1;
 
-	// 3. 문자열 복사
 	strlcpy(cmd_line_copy, cmd_line, PGSIZE);
 
-	// 4. process_exec()로 cmd_line으로 만든 새 프로그램으로 context switching
 	if (process_exec(cmd_line_copy) == -1)
 		return -1;
 
@@ -494,43 +511,35 @@ tid_t sys_fork(const char *thread_name, struct intr_frame *f)
 
 	return result;
 }
-/* System call numbers. */
-// enum
-// {
-// 	/* Projects 2 and later. */
-// 	SYS_HALT,	  /* Halt the operating system. */
-// 	SYS_EXIT,	  /* Terminate this process. */
-// 	SYS_FORK,	  /* Clone current process. */
-// 	SYS_EXEC,	  /* Switch current process. */
-// 	SYS_WAIT,	  /* Wait for a child process to die. */
-// 	SYS_CREATE,	  /* Create a file. */
-// 	SYS_REMOVE,	  /* Delete a file. */
-// 	SYS_OPEN,	  /* Open a file. */
-// 	SYS_FILESIZE, /* Obtain a file's size. */
-// 	SYS_READ,	  /* Read from a file. */
-// 	SYS_WRITE,	  /* Write to a file. */
-// 	SYS_SEEK,	  /* Change position in a file. */
-// 	SYS_TELL,	  /* Report current position in a file. */
-// 	SYS_CLOSE,	  /* Close a file. */
 
-// 	/* Project 3 and optionally project 4. */
-// 	SYS_MMAP,	/* Map a file into memory. */
-// 	SYS_MUNMAP, /* Remove a memory mapping. */
+void sys_seek(int fd, unsigned position)
+{
 
-// 	/* Project 4 only. */
-// 	SYS_CHDIR,	 /* Change the current directory. */
-// 	SYS_MKDIR,	 /* Create a directory. */
-// 	SYS_READDIR, /* Reads a directory entry. */
-// 	SYS_ISDIR,	 /* Tests if a fd represents a directory. */
-// 	SYS_INUMBER, /* Returns the inode number for a fd. */
-// 	SYS_SYMLINK, /* Returns the inode number for a fd. */
+	// 1. 표준 입출력과 범위 외에 FD 값 제외
+	if (fd < 2 || fd >= FDT_SIZE)
+		return;
+	// 2. 해당되는 파일 갖고 오기
+	struct file *file = thread_current()->fd_table[fd];
+	if (file == NULL)
+		return;
+	// 3. file seek() 호출
+	lock_acquire(&filesys_lock);
+	file_seek(file, position);
+	lock_release(&filesys_lock);
+}
 
-// 	/* Extra for Project 2 */
-// 	SYS_DUP2, /* Duplicate the file descriptor */
+int sys_tell(int fd)
+{
+	if (fd < 2 || fd >= FDT_SIZE)
+		return 0;
 
-// 	SYS_MOUNT,
-// 	SYS_UMOUNT,
-// };
+	struct file *file_obj = thread_current()->fd_table[fd];
+	if (file_obj == NULL)
+		return 0;
 
-/* --- 1. 헬퍼 함수 프로토타입 선언 --- */
-/* syscall_handler가 호출하기 전에 이 함수들이 선언되어 있어야 합니다. */
+	lock_acquire(&filesys_lock);
+	unsigned position = file_tell(file_obj);
+	lock_acquire(&filesys_lock);
+
+	return position;
+}
