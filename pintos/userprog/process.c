@@ -21,6 +21,7 @@
 #include "threads/synch.h"
 #include "threads/malloc.h"
 #include "list.h"
+#include "filesys/file.h"
 #ifdef VM
 #include "vm/vm.h"
 #endif
@@ -36,6 +37,9 @@ struct do_fork_aux {
 	struct semaphore *sema;
 	bool *succ;
 };
+
+
+extern struct lock file_create_look;
 
 /* General process initializer for initd and other process. */
 static void
@@ -230,7 +234,7 @@ __do_fork (void *aux) {
         goto error;
     }
 
-	 for (int i = 2; i < 128; i++) {
+	 for (int i = 0; i < 512; i++) {
 		if (parent->fd_table[i]	!= NULL) {
 			current->fd_table[i] = file_duplicate(parent->fd_table[i]);
 		}
@@ -328,13 +332,15 @@ process_exit (void) {
 	}
 
     if (curr->fd_table != NULL) {
-        for (int i = 0; i < 128; i++) {
+		lock_acquire(&file_create_look);
+        for (int i = 0; i < 512; i++) {
             if (curr->fd_table[i] != NULL) {
                 file_close(curr->fd_table[i]);
                 curr->fd_table[i] = NULL;
             }
         }
-        
+        lock_release(&file_create_look); // [수정] 락 해제
+
         palloc_free_page(curr->fd_table);
         curr->fd_table = NULL; 
     }

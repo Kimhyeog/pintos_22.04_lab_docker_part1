@@ -43,7 +43,7 @@ int dup2(int oldfd, int newfd);
 #define MSR_LSTAR 0xc0000082        /* Long mode SYSCALL target */
 #define MSR_SYSCALL_MASK 0xc0000084 /* Mask for the eflags */
 
-static struct lock file_create_look;
+struct lock file_create_look;
 
 void
 syscall_init (void) {
@@ -68,7 +68,7 @@ void syscall_handler (struct intr_frame *f UNUSED) {
 		case SYS_WRITE: {
 			int fd = f->R.rdi;
 			check_valid_address((char *)f->R.rsi);
-			if (fd < 0 || fd >= 128) {
+			if (fd < 0 || fd >= 512) {
 				thread_current()->exit_status = -1;
 				thread_exit();
 			}
@@ -127,9 +127,8 @@ void syscall_handler (struct intr_frame *f UNUSED) {
 
 		case SYS_CLOSE:
 			int fd = f->R.rdi;
-			if (fd < 2 || fd >= 128) {
-				thread_current()->exit_status = -1;
-				thread_exit();
+			if (fd < 0 || fd >= 512) {
+				break;
 			}
 
 			lock_acquire(&file_create_look);
@@ -149,7 +148,7 @@ void syscall_handler (struct intr_frame *f UNUSED) {
 				check_valid_address(buffer + size - 1);
 			}
 
-			if ((read_fd != 0 && read_fd < 2) || read_fd >= 128 || buffer == NULL || size < 0) {
+			if ((read_fd != 0 && read_fd < 2) || read_fd >= 512 || buffer == NULL || size < 0) {
 				thread_current()->exit_status = -1;
 				thread_exit();
 			}
@@ -163,7 +162,7 @@ void syscall_handler (struct intr_frame *f UNUSED) {
 
 		case SYS_FILESIZE:
 			int size_fd = f->R.rdi;
-			if (size_fd < 0 || size_fd >= 128) {
+			if (size_fd < 0 || size_fd >= 512) {
 				thread_current()->exit_status = -1;
 				thread_exit();
 			}
@@ -185,45 +184,70 @@ void syscall_handler (struct intr_frame *f UNUSED) {
 			break;
 		}
 
-		case SYS_SEEK: {
-			struct thread *curr = thread_current();
-			int fd= f->R.rdi;
-			off_t pos = f->R.rsi;
+        case SYS_SEEK: {
+            int fd = f->R.rdi;
+            off_t pos = f->R.rsi;
+            
+            if (fd < 2 || fd >= 512) {
+                break;
+            }
 
-			struct file *file = curr->fd_table[fd];		
-			if (file != NULL) {
-				file_seek(file, pos);
-			}	
+            lock_acquire(&file_create_look);
+            struct file *file = thread_current()->fd_table[fd];
+            if (file != NULL) {
+                file_seek(file, pos);
+            }
+            lock_release(&file_create_look);
+            
+            break; 
+        }
+
+		case SYS_TELL: {
+			int fd = f->R.rdi;
+			if (fd < 2 || fd >= 512) {
+				f->R.rax = -1;
+				break;
+			}
+			lock_acquire(&file_create_look);
+			struct file *file = thread_current()->fd_table[fd];
+			if (file == NULL) {
+				f->R.rax = -1;
+			} else {
+				f->R.rax = file_tell(file);
+			}
+			lock_release(&file_create_look);
+			break;
 		}
 
-		case SYS_DUP2:
-			
-			break;
-		
+        case SYS_DUP2: {
+            int oldfd = f->R.rdi;
+            int newfd = f->R.rsi;
+            
+            lock_acquire(&file_create_look);
+            f->R.rax = dup2(oldfd, newfd);
+            lock_release(&file_create_look);
+            
+            break;
+        }
 		default:
 			break;
 	}
 }
 
 int sys_write (int fd, const void *buffer, unsigned size) {
-    if (size == 0) {
-        return 0; 
-    }
+    if (size == 0) return 0;
+    if (fd <= 0 || fd >= 512) return -1; // Cannot write to stdin or invalid FDs.
 
-    if (fd == 1) {
+    struct file *file_obj = thread_current()->fd_table[fd];
+
+    if (file_obj == NULL) {
+        // This fd is not a file. Assume it's a console output stream.
         putbuf(buffer, size);
         return size;
     }
 
-	struct thread *current = thread_current();
-	struct file *file = current->fd_table[fd];
-
-	if (file == NULL) {
-		return 0;
-	}
-
-	int result = file_write (file, buffer, size);
-    return result; 
+    // It's a file.
+    return file_write(file_obj, buffer, size);
 }
 
 void halt(void) {
@@ -240,7 +264,7 @@ int sys_open (const char *file_name) {
 	struct file **fd_table = thread_current()->fd_table;
 	bool success = false;
 	int i = 2;
-	for (; i < 128; i++) {
+	for (; i < 512; i++) {
 		if (fd_table[i] == NULL) {
 			fd_table[i] = open_file;
 			success = true;
@@ -340,4 +364,32 @@ tid_t sys_fork (const char *thread_name, struct intr_frame *f) {
 
 int dup2(int oldfd, int newfd) {
 
+	if (oldfd < 0 || oldfd >= 512 || newfd < 0 || newfd >= 512) {
+		return -1;
+	}
+    
+    struct file **fd_table = thread_current()->fd_table;
+
+	if (oldfd == newfd) {
+		return newfd;
+	}
+
+	struct file *old_file = fd_table[oldfd];
+	struct file *new_file = fd_table[newfd];
+
+	if (old_file == new_file) {
+		return newfd;
+	}
+
+    if (new_file != NULL) {
+        file_close(new_file);
+    }
+
+	fd_table[newfd] = old_file;
+
+	if (old_file != NULL) {
+		file_dup(old_file);
+	}
+
+	return newfd;	 
 }
