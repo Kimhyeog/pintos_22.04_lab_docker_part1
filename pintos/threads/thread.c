@@ -224,6 +224,9 @@ tid_t thread_create(const char *name, int priority, thread_func *function, void 
 		palloc_free_page(t); // 실패하면 스레드 메모리도 반납
 		return TID_ERROR;
 	}
+
+	t->fd_table[0] = (struct file *)1;
+	t->fd_table[1] = (struct file *)2;
 	/* =========================================================== */
 
 	struct thread *parent = thread_current();

@@ -253,6 +253,15 @@ void syscall_handler(struct intr_frame *f UNUSED)
 		sys_exit(status);
 		break;
 	}
+	case SYS_DUP2:
+	{
+		int oldfd = f->R.rdi;
+		int newfd = f->R.rsi;
+
+		f->R.rax = sys_dup2(oldfd, newfd);
+
+		break;
+	}
 	default:
 	{
 
@@ -283,11 +292,20 @@ void sys_exit(int status)
 int sys_write(int fd, const void *buffer, unsigned size)
 {
 
-	int byte_written = -1;
 	// 1. 쓰기 전 주소 검사하는게 좋다.
 	check_buffer(buffer, size);
+
+	// 예외 fd 범위 수정
+	if (fd < 0 || fd >= FDT_SIZE)
+		return -1;
+
+	// 현재 쓰레드의 FDT에 해당하는 file 포인터 추출
+	struct thread *cur = thread_current();
+	struct file *file_obj = cur->fd_table[fd];
+
 	// 2. 표준 출력(콘솔)인 경우
-	if (fd == 1)
+	// fd == 1이라고 무조건 출력하는 게 아니라, FDT를 확인해야 합니다.
+	if (file_obj == (struct file *)2)
 	{
 		putbuf(buffer, size); // 콘솔에 문자열 출력
 		// 역할1 : putbuf는 size로 지정된 여러 바이트(문자열)를 한 번에 처리합니다.
@@ -295,14 +313,11 @@ int sys_write(int fd, const void *buffer, unsigned size)
 		// -> 여러 프로세스가 동시에 printf를 호출해도 출력이 섞이지 않도록 보장
 
 		// 쓴 바이트 수만큼 반환
-		byte_written = size;
+		return size;
 	}
 	// 3. 그 외(파일 쓰기 등)
 	else if (fd >= 2 && fd < FDT_SIZE)
 	{
-		// 현재 쓰레드의 FDT에 해당하는 file 포인터 추출
-		struct thread *cur = thread_current();
-		struct file *file_obj = cur->fd_table[fd];
 
 		// file NULL인지 check
 		if (file_obj == NULL)
@@ -310,11 +325,13 @@ int sys_write(int fd, const void *buffer, unsigned size)
 
 		// 파일 쓰기 요청
 		lock_acquire(&filesys_lock);
-		byte_written = file_write(file_obj, buffer, size);
+		int byte_written = file_write(file_obj, buffer, size);
 		lock_release(&filesys_lock);
+
+		return byte_written;
 	}
 
-	return byte_written;
+	return -1;
 }
 
 int sys_exec(const char *cmd_line)
@@ -409,27 +426,25 @@ int sys_open(const char *file)
 
 void sys_close(int fd)
 {
-	// 1. 해당 close할 파일이 fd 범위 외라면, 종료
-	if (fd < 2 || fd >= FDT_SIZE)
+	if (fd < 0 || fd >= FDT_SIZE)
 		return;
 
-	// 2. 현재 thread의 FDT에서 fd에 해당되는 파일 추출
 	struct thread *cur = thread_current();
-	struct file *file_obj = cur->fd_table[fd];
+	struct file *file = cur->fd_table[fd];
 
-	// 3. NULL file일 경우 종료
-	if (file_obj == NULL)
+	if (file == NULL)
 		return;
 
-	// 4. close 과정 시작
-	lock_acquire(&filesys_lock);
-	file_close(file_obj);
-	lock_release(&filesys_lock);
+	// [수정] 표준 입출력(Dummy)이 아닐 때만 실제 file_close 호출
+	if (file > (struct file *)2)
+	{
+		lock_acquire(&filesys_lock);
+		file_close(file);
+		lock_release(&filesys_lock);
+	}
 
-	// 5. thread의 FDT에서 해당 fd의 파일 삭제
 	cur->fd_table[fd] = NULL;
 }
-
 bool sys_remove(const char *file_name)
 {
 	// 1. 문자열 전체 유효성 검사
@@ -449,8 +464,11 @@ int sys_read(int fd, void *buffer, unsigned size)
 	// 1. 버퍼 유효성 검사
 	check_buffer(buffer, size);
 
+	struct thread *cur = thread_current();
+	struct file *file_obj = cur->fd_table[fd];
+
 	// 2. fd==0일 시, 키보드 입력
-	if (fd == STDIN_FILENO)
+	if (file_obj == (struct file *)1)
 	{
 		char *buf_ptr = (char *)buffer;
 
@@ -467,8 +485,6 @@ int sys_read(int fd, void *buffer, unsigned size)
 	{
 		int byte_read_size = -1;
 		lock_acquire(&filesys_lock);
-		struct thread *cur = thread_current();
-		struct file *file_obj = cur->fd_table[fd];
 
 		if (file_obj == NULL)
 		{
@@ -535,15 +551,62 @@ void sys_seek(int fd, unsigned position)
 int sys_tell(int fd)
 {
 	if (fd < 2 || fd >= FDT_SIZE)
-		return 0;
+		return -1;
 
 	struct file *file_obj = thread_current()->fd_table[fd];
 	if (file_obj == NULL)
-		return 0;
+		return -1;
 
 	lock_acquire(&filesys_lock);
 	unsigned position = file_tell(file_obj);
-	lock_acquire(&filesys_lock);
+	lock_release(&filesys_lock);
 
 	return position;
+}
+
+int sys_dup2(int oldfd, int newfd)
+{
+	struct thread *cur = thread_current();
+
+	// 1. fd 유효성 검사
+	if (oldfd < 0 || oldfd >= FDT_SIZE || newfd < 0 || newfd >= FDT_SIZE)
+		return -1;
+
+	// 2. 자기 자신 복제는 그냥 리턴
+	if (oldfd == newfd)
+		return newfd;
+
+	struct file *old_file = cur->fd_table[oldfd];
+	if (old_file == NULL)
+		return -1;
+
+	struct file *new_file = cur->fd_table[newfd];
+
+	// 3. newfd가 이미 열려있다면 닫기 (표준 입출력이 아닐 경우에만)
+	if (new_file != NULL)
+	{
+		if (new_file > (struct file *)2)
+		{
+			lock_acquire(&filesys_lock); // 파일 조작 시 락 필수
+			file_close(new_file);
+			lock_release(&filesys_lock);
+		}
+		cur->fd_table[newfd] = NULL;
+	}
+
+	// 4. 복제 수행
+	// old_file이 표준 입출력(dummy)인 경우와 실제 파일인 경우 분기
+	if (old_file > (struct file *)2)
+	{
+		lock_acquire(&filesys_lock);
+		cur->fd_table[newfd] = file_duplicate_shallow(old_file); // ref_cnt 증가
+		lock_release(&filesys_lock);
+	}
+	else
+	{
+		// 표준 입출력은 그냥 값만 복사 (ref_cnt 개념 없음)
+		cur->fd_table[newfd] = old_file;
+	}
+
+	return newfd;
 }

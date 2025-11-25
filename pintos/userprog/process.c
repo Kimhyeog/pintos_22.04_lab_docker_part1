@@ -242,24 +242,28 @@ static void __do_fork(void *aux)
 		goto error;
 #endif
 	// 5. 부모의 FDT 복사 과정
-	for (int fd = 2; fd < FDT_SIZE; fd++)
+	// __do_fork 내부
+	for (int i = 0; i < FDT_SIZE; i++)
 	{
-		struct file *file_obj = parent->fd_table[fd];
-		if (file_obj != NULL)
+		struct file *file = parent->fd_table[i];
+		if (file == NULL)
 		{
-			// file_duplicate: 파일 객체를 복제하고 open count를 증가시킴
-			// (주의: 단순히 포인터만 복사하면 한쪽이 close할 때 문제 발생)
-			lock_acquire(&filesys_lock);
-			struct file *dup_file = file_duplicate(file_obj);
-			lock_release(&filesys_lock);
-			if (dup_file == NULL)
-				goto error;
+			current->fd_table[i] = NULL;
+			continue;
+		}
 
-			/* 자식의 FDT에 복제된 파일 할당 */
-			current->fd_table[fd] = dup_file;
+		// [수정] 표준 입출력이면 그냥 복사, 파일이면 duplicate(ref_cnt++)
+		if (file != (struct file *)2 && file != (struct file *)1)
+		{
+			lock_acquire(&filesys_lock); // Duplicate 시 락 권장
+			current->fd_table[i] = file_duplicate(file);
+			lock_release(&filesys_lock);
+		}
+		else
+		{
+			current->fd_table[i] = file;
 		}
 	}
-
 	// process_init();
 
 	/* Finally, switch to the newly created process. */
@@ -418,15 +422,18 @@ void process_exit(void)
 
 	if (cur->fd_table != NULL)
 	{
-		for (int fd = 0; fd < FDT_SIZE; fd++)
-			if (cur->fd_table[fd] != NULL)
+		for (int i = 0; i < FDT_SIZE; i++)
+		{
+			if (cur->fd_table[i] != NULL)
 			{
-				file_close(cur->fd_table[fd]);
-				cur->fd_table[fd] = NULL;
+				// [수정] Dummy가 아닐 때만 close
+				if (cur->fd_table[i] > (struct file *)2)
+				{
+					file_close(cur->fd_table[i]);
+				}
 			}
-
+		}
 		palloc_free_page(cur->fd_table);
-		cur->fd_table = NULL;
 	}
 
 	struct list_elem *e;

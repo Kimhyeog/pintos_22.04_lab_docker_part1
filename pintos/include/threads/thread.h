@@ -14,7 +14,7 @@
 typedef int fixed_t;
 
 // 파일 디스크립터 테이블
-#define FDT_SIZE 128
+#define FDT_SIZE 512
 
 #define F (1 << 14)
 
