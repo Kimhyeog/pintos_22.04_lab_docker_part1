@@ -49,13 +49,11 @@ process_init (void) {
 	// [수정] 동적 할당 수행
     // PAL_ZERO: 할당받은 페이지를 모두 0(NULL)으로 초기화해줌. for문 필요 없음.
     current->fd_table = palloc_get_page(PAL_ZERO);
+	if (current->fd_table != NULL) {
+		current->fd_table[STDIN_FILENO] = STDIN_SENTINEL;
+		current->fd_table[STDOUT_FILENO] = STDOUT_SENTINEL;
+	}
 
-    // [필수] 메모리 부족 시 예외 처리
-    if (current->fd_table == NULL) {
-        // 상황에 따라 thread_exit()을 하거나 호출부에서 처리
-        // 여기서는 일단 return; (호출하는 쪽에서 NULL 체크 권장)
-        return; 
-    }
 }
 
 /* Starts the first userland program, called "initd", loaded from FILE_NAME.
@@ -235,8 +233,13 @@ __do_fork (void *aux) {
     }
 
 	 for (int i = 0; i < 512; i++) {
-		if (parent->fd_table[i]	!= NULL) {
-			current->fd_table[i] = file_duplicate(parent->fd_table[i]);
+		struct file *parent_fd = parent->fd_table[i];
+		if (parent_fd == STDIN_SENTINEL || parent_fd == STDOUT_SENTINEL) {
+			current->fd_table[i] = parent_fd;
+		} else if (parent_fd != NULL) {
+			current->fd_table[i] = file_duplicate(parent_fd);
+		} else {
+			current->fd_table[i] = NULL;
 		}
 	}
 
@@ -334,8 +337,9 @@ process_exit (void) {
     if (curr->fd_table != NULL) {
 		lock_acquire(&file_create_look);
         for (int i = 0; i < 512; i++) {
-            if (curr->fd_table[i] != NULL) {
-                file_close(curr->fd_table[i]);
+            struct file *fd_entry = curr->fd_table[i];
+            if (fd_entry != NULL && fd_entry != STDIN_SENTINEL && fd_entry != STDOUT_SENTINEL) {
+                file_close(fd_entry);
                 curr->fd_table[i] = NULL;
             }
         }

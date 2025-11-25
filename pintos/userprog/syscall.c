@@ -236,17 +236,20 @@ void syscall_handler (struct intr_frame *f UNUSED) {
 
 int sys_write (int fd, const void *buffer, unsigned size) {
     if (size == 0) return 0;
-    if (fd <= 0 || fd >= 512) return -1; // Cannot write to stdin or invalid FDs.
+    
+    if (fd < 0 || fd >= 512) return -1;
 
     struct file *file_obj = thread_current()->fd_table[fd];
 
-    if (file_obj == NULL) {
-        // This fd is not a file. Assume it's a console output stream.
+    if (file_obj == STDOUT_SENTINEL) {
         putbuf(buffer, size);
         return size;
     }
+    
+    if (file_obj == NULL || file_obj == STDIN_SENTINEL) {
+        return -1;
+    }
 
-    // It's a file.
     return file_write(file_obj, buffer, size);
 }
 
@@ -303,12 +306,14 @@ void check_valid_address(char *address) {// 처음과 끝만 확인 vs 다 확�
 }
 
 void sys_close (int fd) {
-
+    if (fd < 0 || fd >= 512) {
+        return;
+    }
 	struct thread *current = thread_current();
 	struct file *file = current->fd_table[fd];
 
-	if (file == NULL) {
-		return;
+	if (file == NULL || file == STDIN_SENTINEL || file == STDOUT_SENTINEL) {
+		return; // Cannot close stdio
 	}
 
     file_close(file); 
@@ -320,42 +325,38 @@ int sys_read (int fd, void *buffer, unsigned size) {
 		return 0;
 	}
 
-	if (fd == 0) {
+    if (fd < 0 || fd >= 512) return -1;
+
+    struct file *file_obj = thread_current()->fd_table[fd];
+    
+	if (file_obj == STDIN_SENTINEL) {
 		char *cur = buffer;
-		for (int i = 0; i < size; i++) {
+		for (unsigned i = 0; i < size; i++) {
 			*cur = input_getc();
 			cur++;
 		}
-
-		return size; // size만큼 꼭 써야하는가?
+		return size;
 	}
+    
+    if (file_obj == NULL || file_obj == STDOUT_SENTINEL) {
+        return -1;
+    }
 
-	if (buffer == NULL) { 
-		return -1;
-	}
-
-	struct thread *current = thread_current();
-	struct file **fd_table = current->fd_table;
-	struct file *read_file = fd_table[fd];
-
-	if (read_file == NULL) {
-		return -1;
-	}
-
-	int result = file_read(read_file, buffer, size);
-	return result;
+	return file_read(file_obj, buffer, size);
 }
 
 int sys_filesize (int fd) {
+    if (fd < 2 || fd >= 512) {
+        return -1;
+    }
 	struct thread *current = thread_current();
 	struct file *file = current->fd_table[fd];
 
-	if (file == NULL) {
+	if (file == NULL || file == STDIN_SENTINEL || file == STDOUT_SENTINEL) {
 		return -1;
 	}
 
-	int result = file_length(file);
-	return result;
+	return file_length(file);
 }
 
 tid_t sys_fork (const char *thread_name, struct intr_frame *f) {	
@@ -377,19 +378,23 @@ int dup2(int oldfd, int newfd) {
 	struct file *old_file = fd_table[oldfd];
 	struct file *new_file = fd_table[newfd];
 
+    if (old_file == NULL) { // Trying to dup an invalid fd
+        return -1;
+    }
+
 	if (old_file == new_file) {
 		return newfd;
 	}
 
-    if (new_file != NULL) {
+    if (new_file != NULL && new_file != STDIN_SENTINEL && new_file != STDOUT_SENTINEL) {
         file_close(new_file);
     }
 
 	fd_table[newfd] = old_file;
 
-	if (old_file != NULL) {
+	if (old_file != NULL && old_file != STDIN_SENTINEL && old_file != STDOUT_SENTINEL) {
 		file_dup(old_file);
 	}
-
+ 
 	return newfd;	 
 }
