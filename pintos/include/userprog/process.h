@@ -3,6 +3,11 @@
 
 #include "threads/thread.h"
 
+#define STDIN_FILENO 0
+#define STDOUT_FILENO 1
+#define STDIN_SENTINEL ((void *) 1)
+#define STDOUT_SENTINEL ((void *) 2)
+
 tid_t process_create_initd (const char *file_name);
 tid_t process_fork (const char *name, struct intr_frame *if_);
 int process_exec (void *f_name);

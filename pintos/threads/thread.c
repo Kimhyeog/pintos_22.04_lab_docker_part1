@@ -11,6 +11,9 @@
 #include "threads/synch.h"
 #include "threads/vaddr.h"
 #include "intrinsic.h"
+#include "filesys/file.h"
+#include "filesys/filesys.h"
+#include "list.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -207,6 +210,18 @@ tid_t thread_create(const char *name, int priority,
 	t->tf.ss = SEL_KDSEG;
 	t->tf.cs = SEL_KCSEG;
 	t->tf.eflags = FLAG_IF;
+
+	// wait 초기화
+	t->child_info = (struct child_info *)malloc(sizeof(struct child_info));
+	if (t->child_info == NULL) {
+		return TID_ERROR;
+	}
+	
+	sema_init(&t->child_info->sema, 0);
+	t->child_info->tid = tid;
+	
+	struct thread *current = thread_current();
+	list_push_back(&current->child_list, &t->child_info->elem);
 
 	/* Add to run queue. */
 	thread_unblock(t);
@@ -580,6 +595,9 @@ init_thread(struct thread *t, const char *name, int priority)
 	t->original_priority = priority;
 	list_init(&t->donations);
 	t->waiting_on = NULL;     
+
+	list_init(&t->child_list);
+	t->child_info = NULL;
 }
 
 /* Chooses and returns the next thread to be scheduled.  Should
